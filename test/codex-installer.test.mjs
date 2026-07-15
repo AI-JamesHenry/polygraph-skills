@@ -26,7 +26,7 @@ test('installPlugin copies the package payload and populates marketplace — doe
   const codexHome = join(homeDir, '.codex');
   const agentsPath = join(codexHome, 'agents');
   const marketplacePath = join(homeDir, '.agents', 'plugins', 'marketplace.json');
-  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'polygraph');
+  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'james-polygraph');
 
   // Pre-populate the marketplace with an unrelated entry to verify it is preserved.
   mkdirSync(join(homeDir, '.agents', 'plugins'), { recursive: true });
@@ -74,13 +74,13 @@ test('installPlugin copies the package payload and populates marketplace — doe
   assert.equal(result.marketplacePath, marketplacePath);
   const marketplace = JSON.parse(readFileSync(marketplacePath, 'utf8'));
   assert.equal(marketplace.name, 'existing-marketplace');
-  assert.deepEqual(marketplace.interface, { displayName: 'Polygraph Plugins' });
+  assert.deepEqual(marketplace.interface, { displayName: 'James Polygraph Plugins' });
   assert.equal(marketplace.plugins.some((p) => p.name === 'other-plugin'), true);
   assert.deepEqual(
-    marketplace.plugins.find((p) => p.name === 'polygraph'),
+    marketplace.plugins.find((p) => p.name === 'james-polygraph'),
     {
-      name: 'polygraph',
-      source: { source: 'local', path: './.agents/plugins/polygraph' },
+      name: 'james-polygraph',
+      source: { source: 'local', path: './.agents/plugins/james-polygraph' },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
       category: 'Productivity',
     }
@@ -137,7 +137,7 @@ test('installPlugin re-copies plugin payload when installed version differs', ()
   const homeDir = mkdtempSync(join(tmpdir(), 'polygraph-home-'));
   const fixture = createFixturePackage(homeDir);
   const codexHome = join(homeDir, '.codex');
-  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'polygraph');
+  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'james-polygraph');
 
   installPlugin({
     packageRoot: fixture.packageRoot,
@@ -148,7 +148,7 @@ test('installPlugin re-copies plugin payload when installed version differs', ()
   const staleVersion = '1.2.2';
   writeFileSync(
     join(installedPluginPath, 'package.json'),
-    JSON.stringify({ name: '@polygraph/codex-plugin', version: staleVersion }, null, 2)
+    JSON.stringify({ name: '@ai-jameshenry/james-polygraph-codex-plugin', version: staleVersion }, null, 2)
   );
   // Also corrupt a skill file to confirm it gets restored
   writeFileSync(join(installedPluginPath, 'skills', 'polygraph', 'SKILL.md'), '# stale\n');
@@ -180,13 +180,13 @@ test('installPlugin refuses to reuse an invalid target without --force when vers
   const homeDir = mkdtempSync(join(tmpdir(), 'polygraph-home-'));
   const fixture = createFixturePackage(homeDir);
   const codexHome = join(homeDir, '.codex');
-  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'polygraph');
+  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'james-polygraph');
 
   // Simulate a dir with the correct version but missing required plugin files
   mkdirSync(installedPluginPath, { recursive: true });
   writeFileSync(
     join(installedPluginPath, 'package.json'),
-    JSON.stringify({ name: '@polygraph/codex-plugin', version: fixture.version }, null, 2)
+    JSON.stringify({ name: '@ai-jameshenry/james-polygraph-codex-plugin', version: fixture.version }, null, 2)
   );
 
   assert.throws(
@@ -211,7 +211,7 @@ test('installPlugin auto-updates when installed package.json is missing (no vers
   const homeDir = mkdtempSync(join(tmpdir(), 'polygraph-home-'));
   const fixture = createFixturePackage(homeDir);
   const codexHome = join(homeDir, '.codex');
-  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'polygraph');
+  const installedPluginPath = join(homeDir, '.agents', 'plugins', 'james-polygraph');
 
   // An empty dir has no package.json → previousVersion=null → version mismatch → auto-update
   mkdirSync(installedPluginPath, { recursive: true });
@@ -240,11 +240,11 @@ function createFixturePackage(baseDir = tmpdir(), version = '1.2.3') {
     join(packageRoot, 'package.json'),
     JSON.stringify(
       {
-        name: '@polygraph/codex-plugin',
+        name: '@ai-jameshenry/james-polygraph-codex-plugin',
         version,
         files: ['.codex-plugin/', 'skills/', 'agents/', 'hooks/', '.mcp.json', 'README.md', 'bin/', 'lib/'],
         bin: {
-          'polygraph-codex-plugin': './bin/polygraph-codex-plugin.mjs',
+          'james-polygraph-codex-plugin': './bin/james-polygraph-codex-plugin.mjs',
         },
       },
       null,
@@ -253,11 +253,11 @@ function createFixturePackage(baseDir = tmpdir(), version = '1.2.3') {
   );
   writeFileSync(
     join(packageRoot, '.codex-plugin', 'plugin.json'),
-    JSON.stringify({ name: 'polygraph', version }, null, 2)
+    JSON.stringify({ name: 'james-polygraph', version }, null, 2)
   );
   writeFileSync(join(packageRoot, '.mcp.json'), JSON.stringify({}));
   writeFileSync(join(packageRoot, 'README.md'), '# Fixture\n');
-  writeFileSync(join(packageRoot, 'bin', 'polygraph-codex-plugin.mjs'), '#!/usr/bin/env node\n');
+  writeFileSync(join(packageRoot, 'bin', 'james-polygraph-codex-plugin.mjs'), '#!/usr/bin/env node\n');
   writeFileSync(join(packageRoot, 'lib', 'installer.mjs'), 'export {};\n');
   writeFileSync(
     join(packageRoot, 'hooks', 'hooks.json'),

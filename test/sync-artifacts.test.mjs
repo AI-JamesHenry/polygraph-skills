@@ -264,6 +264,24 @@ test('codex session-start skill routes session creation through init subagent', 
   assertNoNonCodexDelegationText(rendered);
 });
 
+test('background-session-start is a fail-closed single-repository bootstrap skill', () => {
+  const rendered = renderSkill('background-session-start', 'claude');
+
+  assert.match(rendered, /^---\n[\s\S]*?name: background-session-start[\s\S]*?\n---\n/);
+  assert.match(rendered, /\/james-polygraph:background-session-start/);
+  assert.match(rendered, /\$ARGUMENTS/);
+  assert.match(rendered, /exactly one Git repository/);
+  assert.match(rendered, /background_session_start/);
+  assert.match(rendered, /capture\.status.*started/);
+  assert.match(rendered, /stop before repository work/i);
+  assert.match(rendered, /provider owns.*branch.*commit.*push.*pull request/is);
+  assert.match(rendered, /associate_pr/);
+  assert.match(rendered, /record_pushed_branch/);
+  assert.match(rendered, /current Polygraph completion closes open or draft pull requests/i);
+  assert.match(rendered, /only after the associated pull request is merged or closed/i);
+  assert.doesNotMatch(rendered, /\b(?:list_repos|spawn_agent|create_pr)\s*\(/);
+});
+
 test('rendered polygraph skill keeps session intro as hidden internal fallback', () => {
   const rendered = renderSkill('polygraph');
   const toolsSection = sectionBetween(rendered, '## Available Tools', '## CLI Statefulness');
@@ -433,6 +451,7 @@ test('opencode skill names are native-compatible and match their directories', (
 test('codex plugin manifest does not advertise agents (codex ignores the field)', () => {
   const manifest = buildCodexPluginManifest(readRootPackageJson());
 
+  assert.equal(manifest.name, 'james-polygraph');
   assert.equal(manifest.agents, undefined);
 });
 
@@ -463,7 +482,7 @@ test('codex plugin manifest describes Polygraph beyond multi-repo coordination',
 test('opencode package is published as a native plugin package', () => {
   const pkg = buildOpenCodePackageJson(readRootPackageJson());
 
-  assert.equal(pkg.name, '@polygraph/opencode-plugin');
+  assert.equal(pkg.name, '@ai-jameshenry/james-polygraph-opencode-plugin');
   assert.equal(pkg.private, false);
   assert.equal(pkg.type, 'module');
   assert.deepEqual(pkg.exports, { './server': './server.js' });
@@ -473,12 +492,15 @@ test('opencode package is published as a native plugin package', () => {
 });
 
 test('buildMcpConfig wraps MCP servers under mcpServers', () => {
-  assert.deepEqual(buildMcpConfig(), {
+  assert.deepEqual(buildMcpConfig('claude'), {
     mcpServers: {
-      'polygraph-mcp': {
+      'james-polygraph-mcp': {
         type: 'stdio',
-        command: 'npx',
-        args: ['@polygraph/mcp@latest'],
+        command: 'node',
+        args: ['${CLAUDE_PLUGIN_ROOT}/wip-mcp/bin/polygraph-mcp.mjs'],
+        env: {
+          POLYGRAPH_AGENT_TYPE: 'claude',
+        },
       },
     },
   });
@@ -487,14 +509,42 @@ test('buildMcpConfig wraps MCP servers under mcpServers', () => {
 test('buildMcpConfig can force an MCP server agent type', () => {
   assert.deepEqual(buildMcpConfig('codex'), {
     mcpServers: {
-      'polygraph-mcp': {
+      'james-polygraph-mcp': {
         type: 'stdio',
-        command: 'npx',
-        args: ['@polygraph/mcp@latest'],
+        command: 'node',
+        args: ['${PLUGIN_ROOT}/wip-mcp/bin/polygraph-mcp.mjs'],
         env: {
           POLYGRAPH_AGENT_TYPE: 'codex',
         },
       },
     },
   });
+});
+
+test('the WIP fork metadata coexists with the official plugin namespace', () => {
+  const pkg = readRootPackageJson();
+  const marketplace = JSON.parse(
+    readFileSync(join(rootDir, '.claude-plugin', 'marketplace.json'), 'utf8')
+  );
+
+  assert.equal(pkg.name, 'james-polygraph-skills');
+  assert.equal(marketplace.name, 'james-polygraph-plugins');
+  assert.equal(marketplace.plugins[0].name, 'james-polygraph');
+  assert.equal(marketplace.plugins[0].source, './dist/claude');
+});
+
+test('Claude Code web installation docs require the vendored WIP MCP and explicit first command', () => {
+  const docs = readFileSync(
+    join(rootDir, 'docs', 'claude-code-web-background-spike.md'),
+    'utf8'
+  );
+
+  assert.match(docs, /source\/wip-mcp\/vendor\/bin\/polygraph-mcp\.mjs/);
+  assert.match(docs, /npm ci/);
+  assert.match(docs, /npm run build/);
+  assert.match(docs, /james-polygraph@james-polygraph-plugins/);
+  assert.match(docs, /\/james-polygraph:background-session-start/);
+  assert.match(docs, /POLYGRAPH_SERVICE_ACCOUNT_SECRET/);
+  assert.match(docs, /revoke/i);
+  assert.match(docs, /completion closes open or draft pull requests/i);
 });

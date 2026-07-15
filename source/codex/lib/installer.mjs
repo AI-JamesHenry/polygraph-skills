@@ -11,10 +11,10 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PLUGIN_NAME = "polygraph";
-const PLUGIN_ID = "polygraph@polygraph-plugins";
-const MARKETPLACE_NAME = "polygraph-plugins";
-const MARKETPLACE_DISPLAY_NAME = "Polygraph Plugins";
+const PLUGIN_NAME = "james-polygraph";
+const PLUGIN_ID = "james-polygraph@james-polygraph-plugins";
+const MARKETPLACE_NAME = "james-polygraph-plugins";
+const MARKETPLACE_DISPLAY_NAME = "James Polygraph Plugins";
 
 export function getPackageRootFromMetaUrl(metaUrl) {
   return resolve(dirname(fileURLToPath(metaUrl)), "..");
@@ -92,14 +92,14 @@ export function loadPackageMetadata(packageRoot) {
  * Materialize the plugin payload so codex's official `codex plugin add` can pick it up.
  *
  * This command:
- *   a. Copies the plugin payload to ~/.agents/plugins/polygraph (version-refresh aware).
- *   b. Ensures the `polygraph` entry in the personal marketplace at
+ *   a. Copies the plugin payload to ~/.agents/plugins/james-polygraph (version-refresh aware).
+ *   b. Ensures the `james-polygraph` entry in the personal marketplace at
  *      ~/.agents/plugins/marketplace.json (codex auto-discovers this file).
  *   c. Copies agents/*.toml to $CODEX_HOME/agents (official `codex plugin add` does
  *      not surface plugin agents; this step keeps them available).
  *
  * It does NOT touch ~/.codex/config.toml — that is codex's job when the consumer
- * subsequently runs `codex plugin add polygraph@polygraph-plugins`.
+ * subsequently runs `codex plugin add james-polygraph@james-polygraph-plugins`.
  */
 export function installPlugin({
   packageRoot,

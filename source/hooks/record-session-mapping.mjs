@@ -4,11 +4,15 @@
 // (agentType=codex). The agentType is passed as the first CLI argument so the
 // same script ships in both plugin artifacts.
 //
-// File contract (must match the Polygraph CLI reader exactly):
+// Bound file contract (must match the Polygraph CLI reader exactly):
 //   ~/.polygraph/sidecars/<POLYGRAPH_SESSION_ID>/mapping-<agentType>-<agentSessionId>.json
+// Pending Claude background-session contract:
+//   ~/.polygraph/sidecars/pending/mapping-claude-<agentSessionId>.json
 //
 // Behaviour:
-//   - Silent no-op when POLYGRAPH_SESSION_ID is unset.
+//   - When a Claude parent starts without POLYGRAPH_SESSION_ID, write a pending
+//     mapping for the WIP MCP to bind after background session creation.
+//   - Other agent types remain a silent no-op when POLYGRAPH_SESSION_ID is unset.
 //   - Silent no-op when POLYGRAPH_CHILD_AGENT is set (child agents must not
 //     register themselves as parents).
 //   - Atomic write: write to <path>.tmp-<pid>, then rename over final path.
@@ -19,12 +23,12 @@
 
 import {
   appendFileSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -32,6 +36,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const BOUND_MARKER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Append a one-line JSON record of a hook failure to ~/.polygraph/logs/hooks.log.
 // This hook swallows its errors silently and must never write to stdout (Claude
@@ -90,6 +95,93 @@ function sanitizeFilename(str) {
   return str.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+function hasBoundCaptureMapping(
+  { agentType, agentSessionId },
+  home = process.env.HOME?.trim() || homedir()
+) {
+  const markerPath = join(
+    home,
+    '.polygraph',
+    'sidecars',
+    'pending',
+    `bound-${sanitizeFilename(`${agentType}-${agentSessionId}`)}.json`
+  );
+  try {
+    const marker = tryParseJson(readFileSync(markerPath, 'utf8'));
+    const valid =
+      marker !== null &&
+      marker.version === 1 &&
+      typeof marker.polygraphSessionId === 'string' &&
+      marker.polygraphSessionId.length > 0 &&
+      marker.agentType === agentType &&
+      marker.agentSessionId === agentSessionId &&
+      Number.isFinite(marker.lastSeenAt) &&
+      Date.now() - marker.lastSeenAt <= BOUND_MARKER_MAX_AGE_MS;
+    if (!valid) {
+      try {
+        unlinkSync(markerPath);
+      } catch {
+        // already gone
+      }
+    }
+    return valid;
+  } catch {
+    return false;
+  }
+}
+
+function writeMapping(
+  { agentType, agentSessionId, polygraphSessionId, cwd, transcriptPath, pid },
+  home
+) {
+  const mappingDir = join(
+    home,
+    '.polygraph',
+    'sidecars',
+    polygraphSessionId ?? 'pending'
+  );
+  mkdirSync(mappingDir, { recursive: true });
+
+  const filenamePart = sanitizeFilename(`${agentType}-${agentSessionId}`);
+  const finalPath = join(mappingDir, `mapping-${filenamePart}.json`);
+  const tmpPath = `${finalPath}.tmp-${process.pid}`;
+  const now = Date.now();
+  let firstSeenAt = now;
+  try {
+    const existing = tryParseJson(readFileSync(finalPath, 'utf8'));
+    if (
+      existing !== null &&
+      existing.version === 1 &&
+      existing.polygraphSessionId === polygraphSessionId &&
+      existing.agentType === agentType &&
+      existing.agentSessionId === agentSessionId &&
+      Number.isFinite(existing.firstSeenAt)
+    ) {
+      firstSeenAt = existing.firstSeenAt;
+    }
+  } catch {
+    // no prior mapping
+  }
+
+  const mapping = {
+    version: 1,
+    ...(polygraphSessionId != null ? { polygraphSessionId } : {}),
+    agentType,
+    agentSessionId,
+    cwd,
+    ...(transcriptPath != null ? { transcriptPath } : {}),
+    ...(pid != null ? { pid } : {}),
+    source: 'hook',
+    firstSeenAt,
+    lastSeenAt: now,
+  };
+
+  writeFileSync(tmpPath, JSON.stringify(mapping, null, 2) + '\n', {
+    mode: 0o600,
+  });
+  renameSync(tmpPath, finalPath);
+}
+
 /**
  * Write (or refresh) the agent-capture mapping file.
  *
@@ -106,51 +198,40 @@ export function writeCaptureMapping(
   { agentType, agentSessionId, polygraphSessionId, cwd, transcriptPath, pid },
   home = process.env.HOME?.trim() || homedir()
 ) {
-  const sidecarDir = join(home, '.polygraph', 'sidecars', polygraphSessionId);
-  mkdirSync(sidecarDir, { recursive: true });
+  writeMapping(
+    {
+      agentType,
+      agentSessionId,
+      polygraphSessionId,
+      cwd,
+      transcriptPath,
+      pid,
+    },
+    home
+  );
+}
 
-  const filenamePart = sanitizeFilename(`${agentType}-${agentSessionId}`);
-  const finalPath = join(sidecarDir, `mapping-${filenamePart}.json`);
-  const tmpPath = `${finalPath}.tmp-${process.pid}`;
-
-  const now = Date.now();
-
-  // Refresh semantics: preserve firstSeenAt from a valid prior mapping.
-  let firstSeenAt = now;
-  if (existsSync(finalPath)) {
-    const existing = tryParseJson(readFileSync(finalPath, 'utf8'));
-    if (
-      existing !== null &&
-      existing.version === 1 &&
-      existing.polygraphSessionId === polygraphSessionId &&
-      existing.agentSessionId === agentSessionId &&
-      Number.isFinite(existing.firstSeenAt)
-    ) {
-      firstSeenAt = existing.firstSeenAt;
-    }
-  }
-
-  const mapping = {
-    version: 1,
-    polygraphSessionId,
-    agentType,
-    agentSessionId,
-    cwd,
-    ...(transcriptPath != null ? { transcriptPath } : {}),
-    ...(pid != null ? { pid } : {}),
-    source: 'hook',
-    firstSeenAt,
-    lastSeenAt: now,
-  };
-
-  writeFileSync(tmpPath, JSON.stringify(mapping, null, 2) + '\n');
-  renameSync(tmpPath, finalPath);
+/**
+ * Write (or refresh) an unbound Claude capture mapping.
+ *
+ * The background-session MCP must resolve exactly one pending mapping for its
+ * current cwd/process, then atomically move it into the session-scoped sidecar
+ * directory after session creation. Pending mappings deliberately omit a
+ * polygraphSessionId because no Polygraph session exists at hook time.
+ */
+export function writePendingCaptureMapping(
+  { agentType, agentSessionId, cwd, transcriptPath, pid },
+  home = process.env.HOME?.trim() || homedir()
+) {
+  writeMapping(
+    { agentType, agentSessionId, cwd, transcriptPath, pid },
+    home
+  );
 }
 
 export function main() {
   try {
     const polygraphSessionId = process.env.POLYGRAPH_SESSION_ID;
-    if (!polygraphSessionId) return;
     if (process.env.POLYGRAPH_CHILD_AGENT) return;
 
     const agentType = process.argv[2];
@@ -179,15 +260,23 @@ export function main() {
         ? payload.transcript_path
         : undefined;
 
-    writeCaptureMapping({
+    const mapping = {
       agentType,
       agentSessionId,
-      polygraphSessionId,
       cwd,
       transcriptPath,
       // process.ppid is the harness pid when the hook is spawned as a child.
       pid: process.ppid,
-    });
+    };
+
+    if (!polygraphSessionId) {
+      if (agentType === 'claude' && !hasBoundCaptureMapping(mapping)) {
+        writePendingCaptureMapping(mapping);
+      }
+      return;
+    }
+
+    writeCaptureMapping({ ...mapping, polygraphSessionId });
   } catch (error) {
     // Silent toward the agent — a broken hook must never break the session —
     // but record it so failures are not invisible.

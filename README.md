@@ -5,10 +5,10 @@
   </picture>
 </p>
 
-<h1 align="center">Polygraph Skills</h1>
+<h1 align="center">James Polygraph (WIP)</h1>
 
 <p align="center">
-  AI agent skills and subagents for <a href="https://trypolygraph.com/">Polygraph</a> — the meta-harness for maximum agentic autonomy, giving agents visibility across every repo and memory that survives every session.
+  A deliberately narrow background-agent session spike for <a href="https://trypolygraph.com/">Polygraph</a>, packaged under a separate namespace so it can coexist with the official plugin.
 </p>
 
 <p align="center">
@@ -25,15 +25,17 @@
 
 Polygraph is a meta-harness for maximum agentic autonomy. It works with the agents you already use and gives them what they're missing: visibility across every repo boundary, and memory that survives every session. Agents discover how repositories relate, coordinate changes across them, and hand off or resume work later with repos, branches, PRs, and logs all preserved.
 
-## Setup
+## Spike scope
 
-Run the interactive setup and follow the prompts:
+The primary entrypoint is:
 
-```sh
-polygraph config
+```text
+/james-polygraph:background-session-start <real user task>
 ```
 
-It detects your AI agent — Claude Code, Codex, OpenCode, and more — and installs the Polygraph skills and subagents for it. Re-run it any time to add another agent or update an existing install.
+It starts one in-place, parent-only Polygraph session from a provider-managed checkout, binds the provider transcript, waits for positive capture acknowledgement, and then continues the user's task. It fails closed before repository work if initialization is incomplete.
+
+See [the Claude Code web spike guide](docs/claude-code-web-background-spike.md) for vendoring, installation, machine-auth configuration, first-command, and teardown steps.
 
 ## Skills
 
@@ -70,7 +72,7 @@ For the strictest release flow, do not allow direct `npm publish` for the truste
 ## Learn More
 
 - **[Polygraph](https://trypolygraph.com/)** — The meta-harness for maximum agentic autonomy
-- **[@polygraph/mcp](https://www.npmjs.com/package/@polygraph/mcp)** — The MCP server that powers Polygraph tools
+- **[Claude Code web spike guide](docs/claude-code-web-background-spike.md)** — Build, install, configure, verify, and tear down the WIP integration
 ## License
 
 License information is defined in the package metadata.

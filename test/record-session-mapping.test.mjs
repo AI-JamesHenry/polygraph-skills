@@ -2,15 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { writeCaptureMapping } from '../source/hooks/record-session-mapping.mjs';
+import {
+  writeCaptureMapping,
+  writePendingCaptureMapping,
+} from '../source/hooks/record-session-mapping.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,6 +29,10 @@ function makeHome() {
 
 function sidecarDir(home, polygraphSessionId) {
   return join(home, '.polygraph', 'sidecars', polygraphSessionId);
+}
+
+function pendingSidecarDir(home) {
+  return join(home, '.polygraph', 'sidecars', 'pending');
 }
 
 function readMappingFiles(home, polygraphSessionId) {
@@ -314,6 +325,147 @@ test('writeCaptureMapping creates intermediate directories from scratch', () => 
     );
 
     assert.ok(existsSync(sidecarDir(home, 'poly-fresh')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('writePendingCaptureMapping records an unbound Claude capture under sidecars/pending', () => {
+  const home = makeHome();
+  try {
+    writePendingCaptureMapping(
+      {
+        agentType: 'claude',
+        agentSessionId: 'provider-session-123',
+        cwd: '/workspace/ocean',
+        transcriptPath: '/tmp/provider-session-123.jsonl',
+        pid: 12345,
+      },
+      home
+    );
+
+    const files = readdirSync(pendingSidecarDir(home));
+    assert.deepEqual(files, ['mapping-claude-provider-session-123.json']);
+
+    const mapping = JSON.parse(
+      readFileSync(join(pendingSidecarDir(home), files[0]), 'utf8')
+    );
+    assert.equal(mapping.version, 1);
+    assert.equal(mapping.polygraphSessionId, undefined);
+    assert.equal(mapping.agentType, 'claude');
+    assert.equal(mapping.agentSessionId, 'provider-session-123');
+    assert.equal(mapping.cwd, '/workspace/ocean');
+    assert.equal(mapping.transcriptPath, '/tmp/provider-session-123.jsonl');
+    assert.equal(mapping.pid, 12345);
+    assert.equal(mapping.source, 'hook');
+    assert.equal(Object.hasOwn(mapping, 'polygraphSessionId'), false);
+    assert.equal(mapping.firstSeenAt, mapping.lastSeenAt);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Claude SessionStart writes a pending mapping when POLYGRAPH_SESSION_ID is absent', () => {
+  const home = makeHome();
+  const hook = fileURLToPath(
+    new URL('../source/hooks/record-session-mapping.mjs', import.meta.url)
+  );
+  try {
+    const result = spawnSync(process.execPath, [hook, 'claude'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        POLYGRAPH_SESSION_ID: '',
+        POLYGRAPH_CHILD_AGENT: '',
+      },
+      input: JSON.stringify({
+        session_id: 'provider-session-start',
+        cwd: '/workspace/ocean',
+        transcript_path: '/tmp/provider-session-start.jsonl',
+      }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.deepEqual(readdirSync(pendingSidecarDir(home)), [
+      'mapping-claude-provider-session-start.json',
+    ]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Codex SessionStart remains a no-op without POLYGRAPH_SESSION_ID', () => {
+  const home = makeHome();
+  const hook = fileURLToPath(
+    new URL('../source/hooks/record-session-mapping.mjs', import.meta.url)
+  );
+  try {
+    const result = spawnSync(process.execPath, [hook, 'codex'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        POLYGRAPH_SESSION_ID: '',
+        POLYGRAPH_CHILD_AGENT: '',
+      },
+      input: JSON.stringify({ session_id: 'codex-unbound', cwd: '/workspace' }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(existsSync(join(home, '.polygraph')), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Claude SessionStart does not recreate pending state after the mapping is bound', () => {
+  const home = makeHome();
+  const hook = fileURLToPath(
+    new URL('../source/hooks/record-session-mapping.mjs', import.meta.url)
+  );
+  try {
+    writeCaptureMapping(
+      {
+        agentType: 'claude',
+        agentSessionId: 'already-bound',
+        polygraphSessionId: 'poly-bound',
+        cwd: '/workspace/ocean',
+      },
+      home
+    );
+    mkdirSync(pendingSidecarDir(home), { recursive: true });
+    writeFileSync(
+      join(pendingSidecarDir(home), 'bound-claude-already-bound.json'),
+      JSON.stringify({
+        version: 1,
+        polygraphSessionId: 'poly-bound',
+        agentType: 'claude',
+        agentSessionId: 'already-bound',
+        lastSeenAt: Date.now(),
+      })
+    );
+
+    const result = spawnSync(process.execPath, [hook, 'claude'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        POLYGRAPH_SESSION_ID: '',
+        POLYGRAPH_CHILD_AGENT: '',
+      },
+      input: JSON.stringify({
+        session_id: 'already-bound',
+        cwd: '/workspace/ocean',
+      }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0);
+    assert.deepEqual(readdirSync(pendingSidecarDir(home)), [
+      'bound-claude-already-bound.json',
+    ]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

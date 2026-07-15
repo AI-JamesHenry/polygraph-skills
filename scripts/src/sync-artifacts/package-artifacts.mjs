@@ -8,15 +8,16 @@ export function readRootPackageJson() {
 }
 
 export function buildMcpConfig(agentType) {
-  const env = agentType ? { POLYGRAPH_AGENT_TYPE: agentType } : undefined;
+  const pluginRoot =
+    agentType === 'codex' ? '${PLUGIN_ROOT}' : '${CLAUDE_PLUGIN_ROOT}';
 
   return {
     mcpServers: {
-      'polygraph-mcp': {
+      'james-polygraph-mcp': {
         type: 'stdio',
-        command: 'npx',
-        args: ['@polygraph/mcp@latest'],
-        ...(env ? { env } : {}),
+        command: 'node',
+        args: [`${pluginRoot}/wip-mcp/bin/polygraph-mcp.mjs`],
+        env: { POLYGRAPH_AGENT_TYPE: agentType },
       },
     },
   };
@@ -24,7 +25,7 @@ export function buildMcpConfig(agentType) {
 
 function buildClaudePluginManifest(pkgJson) {
   return {
-    name: 'polygraph',
+    name: 'james-polygraph',
     version: pkgJson.version,
     description: pkgJson.description,
     author: pkgJson.author,
@@ -35,7 +36,7 @@ function buildClaudePluginManifest(pkgJson) {
 
 export function buildCodexPluginManifest(pkgJson) {
   return {
-    name: 'polygraph',
+    name: 'james-polygraph',
     version: pkgJson.version,
     description: pkgJson.description,
     author: pkgJson.author,
@@ -47,7 +48,7 @@ export function buildCodexPluginManifest(pkgJson) {
     mcpServers: './.mcp.json',
     hooks: './hooks/hooks.json',
     interface: {
-      displayName: 'Polygraph',
+      displayName: 'James Polygraph (WIP)',
       shortDescription: 'Cross-repo visibility and persistent memory for Codex agents.',
       longDescription:
         'Give Codex the Polygraph meta-harness: repository graph context, resumable agent sessions, linked PR and CI state, and workflows for coordinating work across repo boundaries when needed.',
@@ -87,7 +88,7 @@ function buildPublishPackageJson(pkgJson, packageName, files, extraFields = {}) 
 }
 
 export function buildOpenCodePackageJson(pkgJson) {
-  return buildPublishPackageJson(pkgJson, '@polygraph/opencode-plugin', [
+  return buildPublishPackageJson(pkgJson, '@ai-jameshenry/james-polygraph-opencode-plugin', [
     'server.js',
     'agent-capture-mapping.mjs',
     'skills/',
@@ -121,22 +122,36 @@ export function finalizeClaudeDist(pkgJson) {
 
   writeJson(
     join(claudeDir, 'package.json'),
-    buildPublishPackageJson(pkgJson, '@polygraph/claude-plugin', [
+    buildPublishPackageJson(pkgJson, '@ai-jameshenry/james-polygraph-claude-plugin', [
       'skills/',
       'agents/',
       'hooks/',
+      'wip-mcp/',
       '.mcp.json',
       '.claude-plugin/',
       'README.md',
     ])
   );
-  writeJson(join(claudeDir, '.mcp.json'), buildMcpConfig());
+  writeJson(join(claudeDir, '.mcp.json'), buildMcpConfig('claude'));
   writeJson(join(pluginDir, 'plugin.json'), buildClaudePluginManifest(pkgJson));
 
   const sourceHooksDir = join(sourceDir, 'hooks');
   if (existsSync(sourceHooksDir)) {
-    cpSync(sourceHooksDir, join(claudeDir, 'hooks'), { recursive: true });
+    const claudeHooksDir = join(claudeDir, 'hooks');
+    mkdirSync(claudeHooksDir, { recursive: true });
+    for (const file of [
+      'hooks.json',
+      'record-session-mapping.mjs',
+      'reinject-polygraph-context.mjs',
+      'remind-subagents.mjs',
+    ]) {
+      cpSync(join(sourceHooksDir, file), join(claudeHooksDir, file));
+    }
   }
+
+  cpSync(join(sourceDir, 'wip-mcp'), join(claudeDir, 'wip-mcp'), {
+    recursive: true,
+  });
 
   copySharedDocs(claudeDir);
 }
@@ -149,18 +164,19 @@ export function finalizeCodexDist(pkgJson) {
 
   writeJson(
     join(codexDir, 'package.json'),
-    buildPublishPackageJson(pkgJson, '@polygraph/codex-plugin', [
+    buildPublishPackageJson(pkgJson, '@ai-jameshenry/james-polygraph-codex-plugin', [
       '.codex-plugin/',
       'skills/',
       'agents/',
       'hooks/',
+      'wip-mcp/',
       'assets/',
       '.mcp.json',
       'README.md',
       'bin/',
     ], {
       bin: {
-        'polygraph-codex-plugin': './bin/polygraph-codex-plugin.mjs',
+        'james-polygraph-codex-plugin': './bin/james-polygraph-codex-plugin.mjs',
       },
     })
   );
@@ -186,17 +202,16 @@ export function finalizeCodexDist(pkgJson) {
     join(codexHooksDir, 'record-session-mapping.mjs')
   );
   cpSync(
-    join(sourceDir, 'hooks', 'check-plugin-version.mjs'),
-    join(codexHooksDir, 'check-plugin-version.mjs')
-  );
-
-  cpSync(
     join(sourceDir, 'assets'),
     join(codexDir, 'assets'),
     {
       recursive: true
     }
   )
+
+  cpSync(join(sourceDir, 'wip-mcp'), join(codexDir, 'wip-mcp'), {
+    recursive: true,
+  });
 
   copySharedDocs(codexDir);
 }
@@ -222,7 +237,7 @@ export function finalizeOpenCodeDist(pkgJson) {
 }
 
 function bundleCodexInstaller(codexDir) {
-  const outputPath = join(codexDir, 'bin', 'polygraph-codex-plugin.mjs');
+  const outputPath = join(codexDir, 'bin', 'james-polygraph-codex-plugin.mjs');
   mkdirSync(join(codexDir, 'bin'), { recursive: true });
 
   buildSync({

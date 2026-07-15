@@ -7,14 +7,14 @@ import {
 } from '../lib/installer.mjs';
 
 const usage = `Usage:
-  npx @polygraph/codex-plugin
-  npx @polygraph/codex-plugin install [--force] [--json]
-  npx @polygraph/codex-plugin check [--json]
+  npx @ai-jameshenry/james-polygraph-codex-plugin
+  npx @ai-jameshenry/james-polygraph-codex-plugin install [--force] [--json]
+  npx @ai-jameshenry/james-polygraph-codex-plugin check [--json]
 
 The install command materializes the plugin payload so that codex's official
 plugin system can pick it up. After running install, run:
 
-  codex plugin add polygraph@polygraph-plugins
+  codex plugin add james-polygraph@james-polygraph-plugins
 
 to have codex register and enable the plugin in its own config.`;
 
@@ -95,6 +95,6 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`polygraph-codex-plugin failed: ${message}`);
+  console.error(`james-polygraph-codex-plugin failed: ${message}`);
   process.exitCode = 1;
 });
