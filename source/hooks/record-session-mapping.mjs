@@ -265,18 +265,25 @@ export function main() {
       agentSessionId,
       cwd,
       transcriptPath,
-      // process.ppid is the harness pid when the hook is spawned as a child.
-      pid: process.ppid,
     };
 
     if (!polygraphSessionId) {
       if (agentType === 'claude' && !hasBoundCaptureMapping(mapping)) {
+        // Claude Web runs SessionStart hooks through a short-lived launcher,
+        // so process.ppid is not a stable liveness signal for the provider
+        // session. The transcript path and session id are the durable binding.
         writePendingCaptureMapping(mapping);
       }
       return;
     }
 
-    writeCaptureMapping({ ...mapping, polygraphSessionId });
+    writeCaptureMapping({
+      ...mapping,
+      polygraphSessionId,
+      // In an already-bound session, process.ppid is the harness process and
+      // remains useful for rejecting stale mappings.
+      pid: process.ppid,
+    });
   } catch (error) {
     // Silent toward the agent — a broken hook must never break the session —
     // but record it so failures are not invisible.

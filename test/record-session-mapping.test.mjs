@@ -392,6 +392,20 @@ test('Claude SessionStart writes a pending mapping when POLYGRAPH_SESSION_ID is 
     assert.deepEqual(readdirSync(pendingSidecarDir(home)), [
       'mapping-claude-provider-session-start.json',
     ]);
+    const mapping = JSON.parse(
+      readFileSync(
+        join(
+          pendingSidecarDir(home),
+          'mapping-claude-provider-session-start.json'
+        ),
+        'utf8'
+      )
+    );
+    assert.equal(
+      Object.hasOwn(mapping, 'pid'),
+      false,
+      'pending Claude Web mappings must not carry the short-lived hook parent pid'
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
