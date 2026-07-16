@@ -51,6 +51,10 @@ const DIRECT_CAPTURE_HOOKS = {
     index: '${index}',
     final: '${final}',
   }),
+  Stop: captureHook({
+    eventType: 'assistant_snapshot',
+    content: '${last_assistant_message}',
+  }),
   PreToolUse: captureHook({
     eventType: 'tool_use',
     content: '${tool_input}',
@@ -82,17 +86,16 @@ const DIRECT_CAPTURE_HOOKS = {
     detail: '${title}',
   }),
   InstructionsLoaded: captureHook({
-    eventType: 'skill_load',
+    eventType: 'event',
     content: '${file_path}',
-    eventId: 'instructions:${prompt_id}:${file_path}',
-    label: '${memory_type}',
+    label: 'Instructions loaded: ${memory_type}',
     detail: '${load_reason}',
   }),
   UserPromptExpansion: captureHook({
     eventType: 'skill_load',
-    content: '${expanded_prompt}',
-    eventId: 'expansion:${prompt_id}:${command}',
-    label: '${command}',
+    content: '${command_source}',
+    label: '${command_name}',
+    detail: '${prompt}\n${command_args}',
   }),
   PermissionRequest: captureHook({
     eventType: 'event',
@@ -105,6 +108,7 @@ const DIRECT_CAPTURE_HOOKS = {
     content: '${tool_input}',
     eventId: 'permission-denied:${tool_use_id}',
     label: 'Permission denied: ${tool_name}',
+    detail: '${reason}',
   }),
   ConfigChange: captureHook({
     eventType: 'event',
@@ -124,19 +128,55 @@ const DIRECT_CAPTURE_HOOKS = {
     content: '${last_assistant_message}',
     eventId: 'subagent-stop:${agent_id}',
     label: '${agent_type}',
-    detail: '${agent_id}',
+    taskId: '${agent_id}',
+    outputFile: '${agent_transcript_path}',
+    status: 'completed',
   }),
   PostCompact: captureHook({
     eventType: 'event',
-    content: '${summary}',
-    eventId: 'compact:${prompt_id}',
+    content: '${compact_summary}',
     label: 'Context compacted',
   }),
   StopFailure: captureHook({
     eventType: 'event',
-    content: '${error}',
-    eventId: 'stop-failure:${prompt_id}',
-    label: 'Assistant stop failed',
+    content: '${last_assistant_message}',
+    label: 'Assistant stop failed: ${error}',
+    detail: '${error_details}',
+  }),
+  SessionStart: captureHook({
+    eventType: 'system',
+    content: 'Claude session ${source}',
+    label: 'session-start',
+  }),
+  SessionEnd: captureHook({
+    eventType: 'system',
+    content: 'Claude session ended: ${reason}',
+    label: 'session-end',
+  }),
+  CwdChanged: captureHook({
+    eventType: 'event',
+    content: '${old_cwd}\n${new_cwd}',
+    label: 'Working directory changed',
+  }),
+  TaskCreated: captureHook({
+    eventType: 'task_notification',
+    content: '${description}',
+    label: '${subject}',
+    taskId: '${task_id}',
+    status: 'created',
+  }),
+  TaskCompleted: captureHook({
+    eventType: 'task_notification',
+    content: '${description}',
+    label: '${subject}',
+    taskId: '${task_id}',
+    status: 'completed',
+  }),
+  TeammateIdle: captureHook({
+    eventType: 'event',
+    content: '${teammate_name}',
+    label: 'Teammate idle',
+    detail: '${team_name}',
   }),
 };
 

@@ -64,6 +64,7 @@ test('activation installs native MCP hooks without credentials', () => {
     const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
     assert(settings.hooks.UserPromptSubmit);
     assert(settings.hooks.MessageDisplay);
+    assert(settings.hooks.Stop);
     assert(settings.hooks.PreToolUse);
     assert(settings.hooks.PostToolUse);
     assert(settings.hooks.PostToolUseFailure);
@@ -83,6 +84,29 @@ test('activation installs native MCP hooks without credentials', () => {
         captureSource: 'polygraph-background-capture-v2',
       },
     });
+    assert.deepEqual(settings.hooks.Stop[0].hooks[0], {
+      type: 'mcp_tool',
+      server: 'polygraph-oauth-spike',
+      tool: 'background_capture_event',
+      input: {
+        eventType: 'assistant_snapshot',
+        content: '${last_assistant_message}',
+        providerSessionId: '${session_id}',
+        captureSource: 'polygraph-background-capture-v2',
+      },
+    });
+    assert.deepEqual(settings.hooks.UserPromptExpansion[0].hooks[0].input, {
+      eventType: 'skill_load',
+      content: '${command_source}',
+      label: '${command_name}',
+      detail: '${prompt}\n${command_args}',
+      providerSessionId: '${session_id}',
+      captureSource: 'polygraph-background-capture-v2',
+    });
+    assert.equal(
+      settings.hooks.PostCompact[0].hooks[0].input.content,
+      '${compact_summary}',
+    );
     assert.doesNotMatch(readFileSync(f.settingsPath, 'utf8'), /token|secret/i);
   } finally {
     f.cleanup();
