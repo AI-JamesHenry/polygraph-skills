@@ -266,6 +266,7 @@ test('codex session-start skill routes session creation through init subagent', 
 
 test('background-session-start is an explicit OAuth capture skill', () => {
   const rendered = renderSkill('background-session-start', 'claude');
+  const frontmatter = rendered.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
 
   assert.match(rendered, /^---\n[\s\S]*?name: background-session-start[\s\S]*?\n---\n/);
   assert.match(rendered, /\/james-polygraph:background-session-start/);
@@ -275,21 +276,48 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /mcp__polygraph-oauth-spike__background_session_start/);
   assert.match(rendered, /background_session_start/);
   assert.match(rendered, /background_capture_event/);
-  assert.match(rendered, /type: mcp_tool/);
-  assert.match(rendered, /providerSessionId: "\$\{session_id\}"/);
-  assert.match(rendered, /content: "\$\{last_assistant_message\}"/);
+  assert.doesNotMatch(frontmatter, /^hooks:/m);
+  assert.match(
+    rendered,
+    /node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/background-capture-lifecycle\.mjs" activate/
+  );
+  assert.match(rendered, /mode-`0600` file under `~\/\.polygraph\/background-capture\/`/);
   assert.match(rendered, /sessionUrl/);
   assert.match(rendered, /capture\.status.*started/);
   assert.match(rendered, /stop\s+before repository work/i);
-  assert.match(rendered, /Do not call `background_capture_event` yourself/);
+  assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
   assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
-  assert.match(rendered, /It does not yet prove complete intermediate tool logging/);
+  assert.match(rendered, /including after that environment pauses and resumes/);
+  assert.match(rendered, /never invoke this skill do not transmit prompt content/);
+  assert.match(rendered, /does not yet capture every intermediate tool call/);
   assert.match(
     rendered,
     /provider continues to own.*branch creation.*commits.*pushes.*pull request creation/is
   );
   assert.doesNotMatch(rendered, /POLYGRAPH_(?:SERVICE_ACCOUNT|API_TOKEN|ACCESS_TOKEN)/);
   assert.doesNotMatch(rendered, /\b(?:list_repos|spawn_agent|create_pr)\s*\(/);
+});
+
+test('Claude plugin hooks keep capture dormant until a session is activated', () => {
+  const hooks = JSON.parse(
+    readFileSync(join(rootDir, 'source', 'hooks', 'hooks.json'), 'utf8')
+  ).hooks;
+
+  const lifecycleCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs';
+
+  assert.ok(
+    hooks.SessionStart[0].hooks.some(
+      (hook) => hook.type === 'command' && hook.command === lifecycleCommand
+    )
+  );
+  assert.deepEqual(hooks.UserPromptSubmit, [
+    { hooks: [{ type: 'command', command: lifecycleCommand }] },
+  ]);
+  assert.deepEqual(hooks.Stop, [
+    { hooks: [{ type: 'command', command: lifecycleCommand }] },
+  ]);
+  assert.doesNotMatch(JSON.stringify(hooks), /"type":"mcp_tool"/);
 });
 
 test('rendered polygraph skill keeps session intro as hidden internal fallback', () => {
@@ -501,19 +529,11 @@ test('opencode package is published as a native plugin package', () => {
   assert.deepEqual(pkg.files, ['server.js', 'agent-capture-mapping.mjs', 'skills/', 'agents/', 'README.md']);
 });
 
-test('buildMcpConfig wraps MCP servers under mcpServers', () => {
-  assert.deepEqual(buildMcpConfig('claude'), {
-    mcpServers: {
-      'james-polygraph-mcp': {
-        type: 'stdio',
-        command: 'node',
-        args: ['${CLAUDE_PLUGIN_ROOT}/wip-mcp/bin/polygraph-mcp.mjs'],
-        env: {
-          POLYGRAPH_AGENT_TYPE: 'claude',
-        },
-      },
-    },
-  });
+test('Claude packaging cannot accidentally restore the legacy local MCP', () => {
+  assert.throws(
+    () => buildMcpConfig('claude'),
+    /Only the Codex package ships the local Polygraph MCP/
+  );
 });
 
 test('buildMcpConfig can force an MCP server agent type', () => {
@@ -543,18 +563,20 @@ test('the WIP fork metadata coexists with the official plugin namespace', () => 
   assert.equal(marketplace.plugins[0].source, './dist/claude');
 });
 
-test('Claude Code web installation docs require the vendored WIP MCP and explicit first command', () => {
+test('Claude Code web installation docs require OAuth connector opt-in without machine credentials', () => {
   const docs = readFileSync(
     join(rootDir, 'docs', 'claude-code-web-background-spike.md'),
     'utf8'
   );
 
-  assert.match(docs, /source\/wip-mcp\/vendor\/bin\/polygraph-mcp\.mjs/);
   assert.match(docs, /npm ci/);
   assert.match(docs, /npm run build/);
   assert.match(docs, /james-polygraph@james-polygraph-plugins/);
   assert.match(docs, /\/james-polygraph:background-session-start/);
-  assert.match(docs, /POLYGRAPH_SERVICE_ACCOUNT_SECRET/);
-  assert.match(docs, /revoke/i);
-  assert.match(docs, /completion closes open or draft pull requests/i);
+  assert.match(docs, /polygraph-oauth-spike/);
+  assert.match(docs, /account-level OAuth connection/);
+  assert.match(docs, /ordinary sessions transmit no prompt content/);
+  assert.match(docs, /pause and resume/);
+  assert.doesNotMatch(docs, /POLYGRAPH_SERVICE_ACCOUNT_(?:CLIENT_ID|SECRET)/);
+  assert.doesNotMatch(docs, /source\/wip-mcp/);
 });

@@ -1,26 +1,11 @@
 # Claude Code web background-session spike
 
-This fork installs as `james-polygraph`, alongside the official `polygraph` plugin. It is intentionally pinned to a vendored Ocean WIP MCP and must never fall back to `@polygraph/mcp@latest`.
+This fork installs as `james-polygraph`, alongside the official `polygraph`
+plugin. For Claude Code web it deliberately ships no local Polygraph MCP and no
+machine credential. All Polygraph tools come from the separately connected
+`polygraph-oauth-spike` remote custom connector.
 
-## 1. Vendor the matching Ocean MCP
-
-Build the complete runnable MCP/CLI distribution from the matching Ocean spike branch:
-
-```sh
-pnpm nx run local-dev:build-background-agent-wip
-```
-
-Copy the contents of Ocean's
-`dist/tools/polygraph/background-agent-wip/` into
-`source/wip-mcp/vendor/` in this checkout so the entrypoint exists at:
-
-```text
-source/wip-mcp/vendor/bin/polygraph-mcp.mjs
-```
-
-Preserve all runtime files the entrypoint imports. Do not copy credentials into the plugin tree.
-
-## 2. Build and validate the plugin
+## 1. Build and validate the plugin
 
 Run this in the fork checkout used by the Claude Code web environment setup:
 
@@ -28,94 +13,80 @@ Run this in the fork checkout used by the Claude Code web environment setup:
 npm ci
 npm test
 npm run build
-node dist/claude/wip-mcp/bin/polygraph-mcp.mjs --help
 ```
 
-The final command must reach the vendored WIP MCP. A `Missing vendored Polygraph WIP MCP entrypoint` error means the Ocean distribution was not copied to the required location.
-
-The local marketplace points at `./dist/claude`, so build before adding the marketplace:
+The local marketplace points at `./dist/claude`, so build before adding it:
 
 ```sh
 claude plugin marketplace add "$PWD"
 claude plugin install james-polygraph@james-polygraph-plugins
 ```
 
-Use the same checkout and dedicated spike branch in the provider setup. Do not install or patch over the official `polygraph` plugin.
+The generated `dist/claude` package must not contain `.mcp.json` or `wip-mcp/`.
+That prevents a missing remote connector from silently falling back to the old
+service-account flow.
 
-## 3. Configure the disposable machine identity
+## 2. Connect the account-level OAuth connector once
 
-No Funnel is enabled by this plugin. Before anyone enables one, present the
-operator with the exact hostname, command, credential lifetime, and data below,
-then wait for explicit approval. A Funnel hostname is open to the entire public
-internet, including callers that do not use Tailscale.
+Add the restricted remote MCP endpoint as the `polygraph-oauth-spike` custom
+connector in Claude. Complete its account-level OAuth connection in the local
+Polygraph UI. This is an installation/connection action, not something an
+unattended background task performs for each run.
 
-Expose only Ocean's loopback-bound deny-by-default proxy. Its complete public
-surface is machine `whoami`, single-repository session init/read, metadata and
-step writes, signed step-blob reads/writes, pushed-branch recording, PR
-association, and completion. It must return `404` for the UI, session lists and
-search, repository discovery, `/prepare`, child-agent routes, service-account
-administration, and every general nx-api/file-server route.
+The spike ingress is a Tailscale Funnel to Ocean's loopback-bound OAuth bridge.
+It exposes only the MCP transport and OAuth discovery/authorization/token
+routes implemented by that bridge. It does not expose the Polygraph UI, general
+nx-api routes, MongoDB, Valkey, repository discovery, or service-account
+administration.
 
-The requests can disclose the disposable Basic-auth credential, organization
-and repository identity, provider session ID, session metadata, commands, file
-paths, source excerpts, tool output, branches, SHAs, and pull-request metadata.
-Signed blob URLs are bearer capabilities. Completion can close open or draft
-pull requests. The proxy has no public rate limiter or body-size limit, so use
-only an attended foreground Funnel for a short test window.
+Do not put `POLYGRAPH_SERVICE_ACCOUNT_*`, `POLYGRAPH_API_URL`,
+`POLYGRAPH_APP_URL`, or `POLYGRAPH_ORG_ID` in the Claude environment. The OAuth
+connector owns the connected Polygraph user/account identity and authorization.
 
-Before the first data-bearing request:
+For the local spike, keep the Funnel hostname in Claude Code web's outbound
+network allowlist. In production, the hosted Polygraph MCP would replace the
+local bridge and Funnel.
 
-1. Verify the proxy's allowlist locally, including negative probes for `/`, the
-   session-list route, and the internal service-account route.
-2. Verify `tailscale funnel status --json` shows no unexpected listeners.
-3. After approval, run only
-   `tailscale funnel --https=443 http://127.0.0.1:4325` without `--bg`.
-4. Repeat the negative probes against the public hostname without credentials.
-5. Ask again before public `whoami`; state that it sends the disposable
-   credential and returns the organization/repository/scope binding.
-6. Ask separately before the first transcript upload, and use synthetic,
-   non-sensitive capture content for that smoke test.
-7. Disable Funnel with `tailscale funnel --https=443 off` and revoke the
-   credential immediately after the attended test.
+## 3. Opt in from the task prompt
 
-See Ocean's `docs/polygraph-background-agent-spike.md` for the exact route/data
-matrix, local credential commands, negative tests, and teardown runbook.
-
-Provide these variables through the provider environment without echoing them in setup logs:
-
-```text
-POLYGRAPH_API_URL=https://<restricted-public-ingress>
-POLYGRAPH_APP_URL=http://localhost:4204
-POLYGRAPH_ORG_ID=<local-polygraph-org-id>
-POLYGRAPH_SERVICE_ACCOUNT_CLIENT_ID=<repository-bound-client-id>
-POLYGRAPH_SERVICE_ACCOUNT_SECRET=<disposable-secret>
-```
-
-`POLYGRAPH_APP_URL` is used only for the developer-facing link returned by the
-skill; the provider does not contact it. The Tailscale Funnel ingress must
-expose only the explicitly allowed machine/session routes and signed
-`/file/polygraph-logs/...` requests. The local Polygraph UI stays private. Add
-the Funnel hostname to Claude Code web's outbound network allowlist.
-
-The loopback proxy gives upstream requests 30 seconds by default. For unusually
-large capture uploads, set `POLYGRAPH_BACKGROUND_PROXY_UPSTREAM_TIMEOUT_MS` to
-a larger bounded value before starting the proxy.
-
-## 4. Make session start the first action
-
-Begin the web task with the explicit command and the real task in the same prompt:
+Start capture with the explicit skill and the real task in the same prompt:
 
 ```text
 /james-polygraph:background-session-start <real user task>
 ```
 
-Do not permit repository work until the command reports a Polygraph session ID/URL and `capture.status: started`. Initialization is fail-closed.
+The skill resolves the repository from the checkout, starts the session through
+the authorized connector, requires positive initial-capture acknowledgement,
+and writes a non-secret local activation marker keyed by the Claude provider
+session ID. It fails closed before repository work if any step is incomplete.
 
-The provider continues to own branch creation, commits, pushes, and pull request creation. After those provider operations, the agent records the pushed branch and associates the provider-created pull request with Polygraph.
+After opt-in, preloaded plugin hooks require the current prompt or final response
+to be sent through the already-authorized connector. The marker survives a
+Claude Code web environment pause and resume. A different provider session has
+no matching marker, so ordinary sessions transmit no prompt content to
+Polygraph.
 
-> [!WARNING]
-> For this spike, current Polygraph completion closes open or draft pull requests. Run completion only after the associated pull request is merged or closed. Otherwise update the session description and leave the session open.
+The current spike captures user prompts and final assistant responses. It does
+not capture every intermediate tool call or intermediate assistant message, and
+does not yet prove recovery after connector/backend restart or a replacement
+worker with a fresh filesystem.
 
-## 5. Tear down immediately after the spike
+## 4. Verify the boundary
 
-Revoke the disposable service-account secret, stop the public ingress, remove the credential from the provider environment, and preserve only non-secret session/verification notes.
+1. Invoke the skill in a fresh Claude Code web session and confirm it returns a
+   non-empty Polygraph session ID and URL.
+2. Send a follow-up without invoking the skill. Confirm both the user prompt and
+   final response append to the same Polygraph agent log.
+3. Pause and resume the Claude environment, then repeat step 2. Confirm the same
+   session receives both events.
+4. Start a brand-new Claude session without invoking the skill. Send a benign
+   prompt and confirm no new Polygraph session or log events appear.
+5. Temporarily disconnect or deny the capture tool in an opted-in session and
+   confirm the hook stops task work instead of silently continuing.
+
+## 5. Spike teardown
+
+Disable the Tailscale Funnel and stop the local OAuth bridge when testing is
+finished. Disconnect the custom connector if the spike authorization should no
+longer remain active. No Claude environment secret needs revocation because the
+worker never receives the OAuth token or a Polygraph service-account secret.

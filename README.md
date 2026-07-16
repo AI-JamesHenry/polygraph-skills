@@ -33,9 +33,9 @@ The primary entrypoint is:
 /james-polygraph:background-session-start <real user task>
 ```
 
-It starts one in-place, parent-only Polygraph session from a provider-managed checkout, binds the provider transcript, waits for positive capture acknowledgement, and then continues the user's task. It fails closed before repository work if initialization is incomplete.
+It starts one in-place, parent-only Polygraph session from a provider-managed checkout through an account-level OAuth connector, waits for positive capture acknowledgement, and then continues the user's task. Follow-up prompts and final responses remain captured after the Claude environment pauses and resumes. It fails closed before repository work if initialization or required capture is incomplete, while sessions that never invoke the skill transmit no prompt content.
 
-See [the Claude Code web spike guide](docs/claude-code-web-background-spike.md) for vendoring, installation, machine-auth configuration, first-command, and teardown steps.
+See [the Claude Code web spike guide](docs/claude-code-web-background-spike.md) for installation, connector authorization, opt-in verification, resume testing, and teardown steps.
 
 ## Skills
 

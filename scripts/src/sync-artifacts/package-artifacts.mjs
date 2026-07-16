@@ -8,15 +8,16 @@ export function readRootPackageJson() {
 }
 
 export function buildMcpConfig(agentType) {
-  const pluginRoot =
-    agentType === 'codex' ? '${PLUGIN_ROOT}' : '${CLAUDE_PLUGIN_ROOT}';
+  if (agentType !== 'codex') {
+    throw new Error('Only the Codex package ships the local Polygraph MCP.');
+  }
 
   return {
     mcpServers: {
       'james-polygraph-mcp': {
         type: 'stdio',
         command: 'node',
-        args: [`${pluginRoot}/wip-mcp/bin/polygraph-mcp.mjs`],
+        args: ['${PLUGIN_ROOT}/wip-mcp/bin/polygraph-mcp.mjs'],
         env: { POLYGRAPH_AGENT_TYPE: agentType },
       },
     },
@@ -126,13 +127,10 @@ export function finalizeClaudeDist(pkgJson) {
       'skills/',
       'agents/',
       'hooks/',
-      'wip-mcp/',
-      '.mcp.json',
       '.claude-plugin/',
       'README.md',
     ])
   );
-  writeJson(join(claudeDir, '.mcp.json'), buildMcpConfig('claude'));
   writeJson(join(pluginDir, 'plugin.json'), buildClaudePluginManifest(pkgJson));
 
   const sourceHooksDir = join(sourceDir, 'hooks');
@@ -141,6 +139,7 @@ export function finalizeClaudeDist(pkgJson) {
     mkdirSync(claudeHooksDir, { recursive: true });
     for (const file of [
       'hooks.json',
+      'background-capture-lifecycle.mjs',
       'record-session-mapping.mjs',
       'reinject-polygraph-context.mjs',
       'remind-subagents.mjs',
@@ -148,10 +147,6 @@ export function finalizeClaudeDist(pkgJson) {
       cpSync(join(sourceHooksDir, file), join(claudeHooksDir, file));
     }
   }
-
-  cpSync(join(sourceDir, 'wip-mcp'), join(claudeDir, 'wip-mcp'), {
-    recursive: true,
-  });
 
   copySharedDocs(claudeDir);
 }
