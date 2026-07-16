@@ -35,17 +35,24 @@ before repository work.
 1. Confirm the current directory is inside exactly one Git repository.
 2. Resolve the canonical `owner/repository` slug from that checkout's configured
    remote. Do not accept a caller-supplied repository identity as authority.
-3. Confirm `CLAUDE_CODE_SESSION_ID` is present, but never print its value.
+3. Use Bash to read the exact, non-empty value of `CLAUDE_CODE_SESSION_ID`
+   from the current process environment. Keep that concrete value out of the
+   user-facing response, but retain it for the MCP argument in step 4. An MCP
+   tool call is structured JSON and does not perform shell expansion, so never
+   pass `$CLAUDE_CODE_SESSION_ID`, `${CLAUDE_CODE_SESSION_ID}`, or the variable
+   name itself as the argument value.
 4. Call `background_session_start` from `polygraph-oauth-spike` exactly once
    with:
    - `task`: `$ARGUMENTS` verbatim;
    - `repository`: the canonical slug from step 2;
-   - `providerSessionId`: the current `CLAUDE_CODE_SESSION_ID`.
+   - `providerSessionId`: the concrete value resolved in step 3.
 5. Require a result containing all of:
    - `status` equal to `started`;
    - a non-empty `sessionId`;
    - a non-empty `sessionUrl`;
    - the same canonical repository slug;
+   - `providerSessionId` exactly equal to the concrete value resolved in step
+     3;
    - `capture.status` equal to `started`;
    - `capture.eventType` equal to `user_prompt`;
    - `capture.received` equal to `1`.

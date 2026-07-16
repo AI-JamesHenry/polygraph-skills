@@ -283,6 +283,12 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   );
   assert.match(rendered, /mode-`0600` file under `~\/\.polygraph\/background-capture\/`/);
   assert.match(rendered, /sessionUrl/);
+  assert.match(
+    rendered,
+    /MCP\s+tool call is structured JSON and does not perform shell expansion/
+  );
+  assert.match(rendered, /providerSessionId.*exactly equal to the concrete value/is);
+  assert.match(rendered, /never\s+pass `\$CLAUDE_CODE_SESSION_ID`/i);
   assert.match(rendered, /capture\.status.*started/);
   assert.match(rendered, /stop\s+before repository work/i);
   assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
