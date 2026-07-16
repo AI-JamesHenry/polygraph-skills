@@ -138,6 +138,32 @@ test('the first stop blocks until the exact assistant response is captured', () 
   }
 });
 
+test('multiline assistant responses are supplied with real line breaks', () => {
+  const root = makeRoot();
+  try {
+    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
+
+    const result = handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'Stop',
+        session_id: PROVIDER_SESSION_ID,
+        stop_hook_active: false,
+        last_assistant_message: 'First paragraph.\n\nSecond paragraph.',
+      },
+      { root, now: 2_000 }
+    );
+
+    assert.equal(result.exitCode, 2);
+    assert.match(result.stderr, /First paragraph\.\n\nSecond paragraph\./);
+    assert.doesNotMatch(
+      result.stderr,
+      /First paragraph\.\\n\\nSecond paragraph\./
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a stop-hook continuation is allowed to finish without recursing', () => {
   const root = makeRoot();
   try {

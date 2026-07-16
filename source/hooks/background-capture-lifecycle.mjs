@@ -126,10 +126,14 @@ function responseCaptureInstruction(providerSessionId, response) {
   return [
     'Polygraph background capture is active.',
     `Before stopping, invoke ${CONNECTOR_TOOL} exactly once with`,
-    `providerSessionId \`${providerSessionId}\`, eventType \`assistant_response\`, and this exact content: ${JSON.stringify(response)}.`,
+    `providerSessionId \`${providerSessionId}\`, eventType \`assistant_response\`, and content equal to the text between the capture markers below, preserving its actual line breaks.`,
+    '<polygraph-capture-content>',
+    response,
+    '</polygraph-capture-content>',
+    'The capture markers are not part of the content.',
     'Do not print the provider session ID.',
     'If capture fails, report the failure and do not claim success.',
-  ].join(' ');
+  ].join('\n');
 }
 
 export function handleBackgroundCaptureHook(
