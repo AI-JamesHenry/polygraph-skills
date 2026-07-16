@@ -264,21 +264,31 @@ test('codex session-start skill routes session creation through init subagent', 
   assertNoNonCodexDelegationText(rendered);
 });
 
-test('background-session-start is a fail-closed single-repository bootstrap skill', () => {
+test('background-session-start is an explicit OAuth capture skill', () => {
   const rendered = renderSkill('background-session-start', 'claude');
 
   assert.match(rendered, /^---\n[\s\S]*?name: background-session-start[\s\S]*?\n---\n/);
   assert.match(rendered, /\/james-polygraph:background-session-start/);
   assert.match(rendered, /\$ARGUMENTS/);
+  assert.match(rendered, /opt-in boundary/);
   assert.match(rendered, /exactly one Git repository/);
+  assert.match(rendered, /mcp__polygraph-oauth-spike__background_session_start/);
   assert.match(rendered, /background_session_start/);
+  assert.match(rendered, /background_capture_event/);
+  assert.match(rendered, /type: mcp_tool/);
+  assert.match(rendered, /providerSessionId: "\$\{session_id\}"/);
+  assert.match(rendered, /content: "\$\{last_assistant_message\}"/);
+  assert.match(rendered, /sessionUrl/);
   assert.match(rendered, /capture\.status.*started/);
-  assert.match(rendered, /stop before repository work/i);
-  assert.match(rendered, /provider owns.*branch.*commit.*push.*pull request/is);
-  assert.match(rendered, /associate_pr/);
-  assert.match(rendered, /record_pushed_branch/);
-  assert.match(rendered, /current Polygraph completion closes open or draft pull requests/i);
-  assert.match(rendered, /only after the associated pull request is merged or closed/i);
+  assert.match(rendered, /stop\s+before repository work/i);
+  assert.match(rendered, /Do not call `background_capture_event` yourself/);
+  assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
+  assert.match(rendered, /It does not yet prove complete intermediate tool logging/);
+  assert.match(
+    rendered,
+    /provider continues to own.*branch creation.*commits.*pushes.*pull request creation/is
+  );
+  assert.doesNotMatch(rendered, /POLYGRAPH_(?:SERVICE_ACCOUNT|API_TOKEN|ACCESS_TOKEN)/);
   assert.doesNotMatch(rendered, /\b(?:list_repos|spawn_agent|create_pr)\s*\(/);
 });
 
