@@ -1,186 +1,175 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   activateBackgroundCapture,
+  deactivateBackgroundCapture,
   handleBackgroundCaptureHook,
 } from '../source/hooks/background-capture-lifecycle.mjs';
 
 const PROVIDER_SESSION_ID = '88b2ff2e-b146-458c-85fc-109c7bc12f26';
 
-function makeRoot() {
-  return mkdtempSync(join(tmpdir(), 'polygraph-background-capture-'));
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'polygraph-background-capture-'));
+  return {
+    root,
+    settingsPath: join(root, '.claude', 'settings.json'),
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function activate(testFixture) {
+  return activateBackgroundCapture(PROVIDER_SESSION_ID, {
+    root: testFixture.root,
+    settingsPath: testFixture.settingsPath,
+    now: 1_000,
+  });
 }
 
 test('ordinary sessions are a local no-op and transmit no prompt content', () => {
-  const root = makeRoot();
+  const f = fixture();
   try {
-    const prompt = 'private prompt that must stay local';
     const result = handleBackgroundCaptureHook(
       {
         hook_event_name: 'UserPromptSubmit',
         session_id: PROVIDER_SESSION_ID,
-        prompt,
+        prompt: 'private prompt that must stay local',
       },
-      { root }
+      { root: f.root },
     );
-
     assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
-    assert.doesNotMatch(result.stdout, /private prompt/);
-    assert.doesNotMatch(result.stderr, /private prompt/);
+    assert.equal(existsSync(f.settingsPath), false);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.cleanup();
   }
 });
 
-test('an activated session receives a fail-closed prompt capture instruction', () => {
-  const root = makeRoot();
+test('activation installs native MCP hooks without credentials', () => {
+  const f = fixture();
   try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
+    const state = activate(f);
+    assert.equal(state.version, 2);
+    assert.equal(state.captureMode, 'native-mcp-hooks');
 
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'UserPromptSubmit',
-        session_id: PROVIDER_SESSION_ID,
-        prompt: 'capture this follow-up',
+    const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
+    assert(settings.hooks.UserPromptSubmit);
+    assert(settings.hooks.MessageDisplay);
+    assert(settings.hooks.PreToolUse);
+    assert(settings.hooks.PostToolUse);
+    assert(settings.hooks.PostToolUseFailure);
+    const handler = settings.hooks.MessageDisplay[0].hooks[0];
+    assert.deepEqual(handler, {
+      type: 'mcp_tool',
+      server: 'polygraph-oauth-spike',
+      tool: 'background_capture_event',
+      input: {
+        eventType: 'assistant_delta',
+        content: '${delta}',
+        eventId: 'message:${message_id}:${index}',
+        messageId: '${message_id}',
+        index: '${index}',
+        final: '${final}',
+        providerSessionId: '${session_id}',
+        captureSource: 'polygraph-background-capture-v2',
       },
-      { root, now: 2_000 }
-    );
-
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stderr, '');
-    const output = JSON.parse(result.stdout);
-    const context = output.hookSpecificOutput.additionalContext;
-    assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-    assert.match(context, /mcp__polygraph-oauth-spike__background_capture_event/);
-    assert.match(context, /eventType `user_prompt`/);
-    assert.match(context, /current user prompt verbatim/);
-    assert.match(context, new RegExp(PROVIDER_SESSION_ID));
-    assert.doesNotMatch(context, /capture this follow-up/);
-    assert.match(context, /If capture fails, stop before doing any other work/);
+    });
+    assert.doesNotMatch(readFileSync(f.settingsPath, 'utf8'), /token|secret/i);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.cleanup();
   }
 });
 
-test('a marker for another provider session does not opt in this session', () => {
-  const root = makeRoot();
+test('activation preserves existing settings and is idempotent', () => {
+  const f = fixture();
   try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
-
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'UserPromptSubmit',
-        session_id: 'different-session',
-        prompt: 'must not leave this worker',
-      },
-      { root, now: 2_000 }
+    mkdirSync(join(f.root, '.claude'), { recursive: true });
+    writeFileSync(
+      f.settingsPath,
+      JSON.stringify({
+        theme: 'dark',
+        hooks: {
+          UserPromptSubmit: [
+            { hooks: [{ type: 'command', command: 'existing-hook' }] },
+          ],
+        },
+      }),
     );
-
-    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+    activate(f);
+    activate(f);
+    const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
+    assert.equal(settings.theme, 'dark');
+    assert.equal(settings.hooks.UserPromptSubmit.length, 2);
+    assert.equal(
+      settings.hooks.UserPromptSubmit.filter(
+        (group) => group.hooks[0].type === 'mcp_tool',
+      ).length,
+      1,
+    );
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.cleanup();
   }
 });
 
-test('resume re-injects capture instructions for an activated session', () => {
-  const root = makeRoot();
+test('activated command hooks become no-ops so events are not duplicated', () => {
+  const f = fixture();
   try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
-
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'SessionStart',
-        source: 'resume',
-        session_id: PROVIDER_SESSION_ID,
-      },
-      { root, now: 2_000 }
-    );
-
-    assert.equal(result.exitCode, 0);
-    const output = JSON.parse(result.stdout);
-    const context = output.hookSpecificOutput.additionalContext;
-    assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
-    assert.match(context, /remains active after resume/i);
-    assert.match(context, /UserPromptSubmit and Stop hooks/);
+    activate(f);
+    for (const hook_event_name of ['UserPromptSubmit', 'Stop', 'SessionStart']) {
+      assert.deepEqual(
+        handleBackgroundCaptureHook(
+          { hook_event_name, session_id: PROVIDER_SESSION_ID },
+          { root: f.root },
+        ),
+        { exitCode: 0, stdout: '', stderr: '' },
+      );
+    }
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.cleanup();
   }
 });
 
-test('the first stop blocks until the exact assistant response is captured', () => {
-  const root = makeRoot();
+test('deactivation removes only Polygraph-owned hooks and the marker', () => {
+  const f = fixture();
   try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
-
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'Stop',
-        session_id: PROVIDER_SESSION_ID,
-        stop_hook_active: false,
-        last_assistant_message: 'Polygraph capture after resume is live.',
-      },
-      { root, now: 2_000 }
+    mkdirSync(join(f.root, '.claude'), { recursive: true });
+    writeFileSync(
+      f.settingsPath,
+      JSON.stringify({
+        hooks: {
+          MessageDisplay: [
+            { hooks: [{ type: 'command', command: 'keep-me' }] },
+          ],
+        },
+      }),
     );
-
-    assert.equal(result.exitCode, 2);
-    assert.equal(result.stdout, '');
-    assert.match(result.stderr, /mcp__polygraph-oauth-spike__background_capture_event/);
-    assert.match(result.stderr, /eventType `assistant_response`/);
-    assert.match(result.stderr, /Polygraph capture after resume is live\./);
-    assert.match(result.stderr, new RegExp(PROVIDER_SESSION_ID));
-    assert.match(result.stderr, /If capture fails, report the failure and do not claim success/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('multiline assistant responses are supplied with real line breaks', () => {
-  const root = makeRoot();
-  try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
-
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'Stop',
-        session_id: PROVIDER_SESSION_ID,
-        stop_hook_active: false,
-        last_assistant_message: 'First paragraph.\n\nSecond paragraph.',
-      },
-      { root, now: 2_000 }
-    );
-
-    assert.equal(result.exitCode, 2);
-    assert.match(result.stderr, /First paragraph\.\n\nSecond paragraph\./);
-    assert.doesNotMatch(
-      result.stderr,
-      /First paragraph\.\\n\\nSecond paragraph\./
+    activate(f);
+    deactivateBackgroundCapture(PROVIDER_SESSION_ID, {
+      root: f.root,
+      settingsPath: f.settingsPath,
+    });
+    const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
+    assert.deepEqual(settings.hooks.MessageDisplay, [
+      { hooks: [{ type: 'command', command: 'keep-me' }] },
+    ]);
+    assert.equal(settings.hooks.UserPromptSubmit, undefined);
+    assert.deepEqual(
+      handleBackgroundCaptureHook(
+        { hook_event_name: 'UserPromptSubmit', session_id: PROVIDER_SESSION_ID },
+        { root: f.root },
+      ),
+      { exitCode: 0, stdout: '', stderr: '' },
     );
   } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('a stop-hook continuation is allowed to finish without recursing', () => {
-  const root = makeRoot();
-  try {
-    activateBackgroundCapture(PROVIDER_SESSION_ID, { root, now: 1_000 });
-
-    const result = handleBackgroundCaptureHook(
-      {
-        hook_event_name: 'Stop',
-        session_id: PROVIDER_SESSION_ID,
-        stop_hook_active: true,
-        last_assistant_message: 'Already captured',
-      },
-      { root, now: 2_000 }
-    );
-
-    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.cleanup();
   }
 });

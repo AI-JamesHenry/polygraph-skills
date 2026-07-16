@@ -292,10 +292,18 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /capture\.status.*started/);
   assert.match(rendered, /stop\s+before repository work/i);
   assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
-  assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
-  assert.match(rendered, /including after that environment pauses and resumes/);
-  assert.match(rendered, /never invoke this skill do not transmit prompt content/);
-  assert.match(rendered, /does not yet capture every intermediate tool call/);
+  assert.match(
+    rendered,
+    /Do not create or edit repository-level `.claude\/settings\.json`/,
+  );
+  assert.match(rendered, /native `mcp_tool` hooks/);
+  assert.match(rendered, /including after pause\/resume/);
+  assert.match(
+    rendered,
+    /never\s+invoke this skill do not transmit prompt content/,
+  );
+  assert.match(rendered, /captures exact user prompts, streamed assistant text, tool/);
+  assert.match(rendered, /does not expose thinking text through hooks/);
   assert.match(
     rendered,
     /provider continues to own.*branch creation.*commits.*pushes.*pull request creation/is

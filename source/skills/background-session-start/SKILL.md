@@ -64,31 +64,38 @@ before repository work.
 
    The helper writes only the current provider session ID and an activation
    timestamp to a mode-`0600` file under `~/.polygraph/background-capture/`.
-   It does not read or persist an OAuth token. Require the command to succeed.
+   It also merges Polygraph-owned native `mcp_tool` hooks into the isolated
+   worker's user-level `~/.claude/settings.json`. Those hooks call only the
+   already-authorized connector and are removed on `SessionEnd`; existing user
+   settings and hooks are preserved. It does not read or persist an OAuth
+   token. Require the command to succeed.
 7. Print the non-secret Polygraph session ID and URL. Only then continue with the user's
    task.
 
 Do not call `background_capture_event` yourself during start. The connector
 records the initial task atomically with session creation. After activation,
-the plugin-level `UserPromptSubmit` and `Stop` hooks require Claude to call the
-already-connected OAuth connector for each later prompt and response without
-placing a Polygraph secret in the worker. If either required capture call fails,
-stop before further task work and report the failure.
+native Claude hooks call the already-connected OAuth connector directly. They
+do not ask the model to relay capture events and do not place a Polygraph secret
+in the worker. Ongoing hook delivery is best-effort because Claude treats hook
+transport failures as non-blocking.
 
-Do not create or edit `.claude/settings.json`, `.claude/settings.local.json`, or
-any other persistent hook configuration. Do not invoke `connector_probe`.
+Do not create or edit repository-level `.claude/settings.json` or
+`.claude/settings.local.json`. The activation helper owns its exact entries in
+the ephemeral worker's user settings; do not modify those entries yourself.
+Do not invoke `connector_probe`.
 
 ## Current capture boundary
 
-This spike captures the explicit skill task, its final assistant response, and
-later user prompts and final assistant responses in the same Claude provider
-session, including after that environment pauses and resumes. Sessions that
-never invoke this skill do not transmit prompt content to Polygraph.
+This spike captures exact user prompts, streamed assistant text, tool
+calls/results/failures, and the lifecycle events exposed by Claude Code hooks in
+the same provider session, including after pause/resume. Sessions that never
+invoke this skill do not transmit prompt content to Polygraph.
 
-It does not yet capture every intermediate tool call or intermediate assistant
-message, and it does not prove recovery after a fresh worker replacement or a
-Polygraph connector/backend restart. Report that boundary accurately; do not
-imply that a complete provider-native transcript was captured.
+Claude does not expose thinking text through hooks, and its provider transcript
+contains only empty signed thinking blocks in this environment. Capture is
+therefore deliberately near-parity rather than a byte-for-byte provider-native
+transcript. Fresh worker replacement is not yet proven. Report those boundaries
+accurately.
 
 The provider continues to own checkout, branch creation, commits, pushes, and
 pull request creation. Do not create or associate a pull request unless the
