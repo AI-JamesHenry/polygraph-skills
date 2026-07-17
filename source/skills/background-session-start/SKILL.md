@@ -65,8 +65,10 @@ before repository work.
    The helper writes only the current provider session ID and an activation
    timestamp to a mode-`0600` file under `~/.polygraph/background-capture/`.
    It also merges Polygraph-owned native `mcp_tool` hooks into the isolated
-   worker's user-level `~/.claude/settings.json`. Those hooks call only the
-   already-authorized connector; existing user settings and hooks are
+   checkout's local-only `.claude/settings.local.json`, which is the hook scope
+   loaded by Claude Web. The helper adds that path to `.git/info/exclude`, so it
+   never dirties or changes the tracked repository. Those hooks call only the
+   already-authorized connector; existing local settings and hooks are
    preserved. The two-second delay gives Claude's settings watcher time to load
    the hooks before repository work begins. The activation marker and hooks
    deliberately survive `SessionEnd`, because Claude Web uses that event when
@@ -82,10 +84,9 @@ do not ask the model to relay capture events and do not place a Polygraph secret
 in the worker. Ongoing hook delivery is best-effort because Claude treats hook
 transport failures as non-blocking.
 
-Do not create or edit repository-level `.claude/settings.json` or
-`.claude/settings.local.json`. The activation helper owns its exact entries in
-the ephemeral worker's user settings; do not modify those entries yourself.
-Do not invoke `connector_probe`.
+Do not create or edit `.claude/settings.json`. The activation helper owns only
+its exact entries in the local-only, Git-excluded `.claude/settings.local.json`;
+do not modify or commit that file yourself. Do not invoke `connector_probe`.
 
 ## Current capture boundary
 

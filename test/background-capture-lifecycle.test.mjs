@@ -113,6 +113,28 @@ test('activation installs native MCP hooks without credentials', () => {
   }
 });
 
+test('default activation uses Git-excluded project-local settings', () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, '.git', 'info'), { recursive: true });
+    activateBackgroundCapture(PROVIDER_SESSION_ID, {
+      root: f.root,
+      projectDir: f.root,
+      now: 1_000,
+    });
+
+    const settingsPath = join(f.root, '.claude', 'settings.local.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    assert(settings.hooks.UserPromptSubmit);
+    assert.match(
+      readFileSync(join(f.root, '.git', 'info', 'exclude'), 'utf8'),
+      /^\/.claude\/settings\.local\.json$/m,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('activation preserves existing settings and is idempotent', () => {
   const f = fixture();
   try {

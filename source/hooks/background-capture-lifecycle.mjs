@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -184,6 +185,41 @@ function defaultRoot() {
   return join(homedir(), '.polygraph');
 }
 
+function defaultProjectDir() {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+function defaultSettingsPath(projectDir = defaultProjectDir()) {
+  return join(projectDir, '.claude', 'settings.local.json');
+}
+
+function gitMetadataDir(projectDir) {
+  const dotGitPath = join(projectDir, '.git');
+  if (!existsSync(dotGitPath)) return null;
+  if (statSync(dotGitPath).isDirectory()) return dotGitPath;
+
+  const pointer = readFileSync(dotGitPath, 'utf8').trim();
+  const match = /^gitdir:\s*(.+)$/i.exec(pointer);
+  return match ? resolve(projectDir, match[1]) : null;
+}
+
+function ensureLocalSettingsIgnored(projectDir, settingsPath) {
+  if (resolve(settingsPath) !== resolve(defaultSettingsPath(projectDir))) return;
+  const gitDir = gitMetadataDir(projectDir);
+  if (!gitDir) return;
+
+  const excludePath = join(gitDir, 'info', 'exclude');
+  const ignoreRule = '/.claude/settings.local.json';
+  const existing = existsSync(excludePath)
+    ? readFileSync(excludePath, 'utf8')
+    : '';
+  if (existing.split(/\r?\n/).includes(ignoreRule)) return;
+
+  mkdirSync(dirname(excludePath), { recursive: true });
+  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+  writeFileSync(excludePath, `${existing}${prefix}${ignoreRule}\n`, 'utf8');
+}
+
 function safeProviderSessionId(providerSessionId) {
   if (
     typeof providerSessionId !== 'string' ||
@@ -209,10 +245,12 @@ export function activateBackgroundCapture(
   {
     root = defaultRoot(),
     now = Date.now(),
-    settingsPath = join(homedir(), '.claude', 'settings.json'),
+    projectDir = defaultProjectDir(),
+    settingsPath = defaultSettingsPath(projectDir),
   } = {}
 ) {
   providerSessionId = safeProviderSessionId(providerSessionId);
+  ensureLocalSettingsIgnored(projectDir, settingsPath);
   installDirectCaptureHooks(settingsPath);
   const path = markerPath(providerSessionId, root);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -306,7 +344,7 @@ export function deactivateBackgroundCapture(
   const resolvedSettingsPath =
     settingsPath ??
     state?.settingsPath ??
-    join(homedir(), '.claude', 'settings.json');
+    defaultSettingsPath();
   removeDirectCaptureHooks(resolvedSettingsPath);
   rmSync(markerPath(providerSessionId, root), { force: true });
 }
