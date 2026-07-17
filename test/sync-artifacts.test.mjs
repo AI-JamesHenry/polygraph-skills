@@ -297,6 +297,8 @@ test('background-session-start is an explicit OAuth capture skill', () => {
     /Do not create or edit repository-level `.claude\/settings\.json`/,
   );
   assert.match(rendered, /native `mcp_tool` hooks/);
+  assert.match(rendered, /settings watcher time to load\s+the hooks/);
+  assert.match(rendered, /survive `SessionEnd`/);
   assert.match(rendered, /including after pause\/resume/);
   assert.match(
     rendered,
@@ -331,6 +333,7 @@ test('Claude plugin hooks keep capture dormant until a session is activated', ()
   assert.deepEqual(hooks.Stop, [
     { hooks: [{ type: 'command', command: lifecycleCommand }] },
   ]);
+  assert.equal(hooks.SessionEnd, undefined);
   assert.doesNotMatch(JSON.stringify(hooks), /"type":"mcp_tool"/);
 });
 

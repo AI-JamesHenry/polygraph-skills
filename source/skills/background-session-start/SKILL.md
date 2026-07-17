@@ -59,16 +59,19 @@ before repository work.
 6. Activate continued capture by running this plugin helper exactly once:
 
    ```text
-   node "${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs" activate
+   node "${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs" activate && sleep 2
    ```
 
    The helper writes only the current provider session ID and an activation
    timestamp to a mode-`0600` file under `~/.polygraph/background-capture/`.
    It also merges Polygraph-owned native `mcp_tool` hooks into the isolated
    worker's user-level `~/.claude/settings.json`. Those hooks call only the
-   already-authorized connector and are removed on `SessionEnd`; existing user
-   settings and hooks are preserved. It does not read or persist an OAuth
-   token. Require the command to succeed.
+   already-authorized connector; existing user settings and hooks are
+   preserved. The two-second delay gives Claude's settings watcher time to load
+   the hooks before repository work begins. The activation marker and hooks
+   deliberately survive `SessionEnd`, because Claude Web uses that event when
+   pausing a worker between ordinary turns. It does not read or persist an
+   OAuth token. Require the command to succeed.
 7. Print the non-secret Polygraph session ID and URL. Only then continue with the user's
    task.
 
