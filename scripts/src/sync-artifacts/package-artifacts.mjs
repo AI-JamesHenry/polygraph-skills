@@ -1,5 +1,5 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { buildSync } from 'esbuild';
 import { distDir, rootDir, sourceDir, writeJson } from './common.mjs';
 
@@ -127,6 +127,7 @@ export function finalizeClaudeDist(pkgJson) {
       'skills/',
       'agents/',
       'hooks/',
+      'wip-mcp/',
       '.claude-plugin/',
       'README.md',
     ])
@@ -147,6 +148,24 @@ export function finalizeClaudeDist(pkgJson) {
       cpSync(join(sourceHooksDir, file), join(claudeHooksDir, file));
     }
   }
+
+  const hostedSidecarRelativePath = join(
+    'vendor',
+    'bin',
+    'lib',
+    'polygraph',
+    'hosted-parent-log-sidecar-entry.js'
+  );
+  const claudeSidecarDir = join(
+    claudeDir,
+    'wip-mcp',
+    dirname(hostedSidecarRelativePath)
+  );
+  mkdirSync(claudeSidecarDir, { recursive: true });
+  cpSync(
+    join(sourceDir, 'wip-mcp', hostedSidecarRelativePath),
+    join(claudeDir, 'wip-mcp', hostedSidecarRelativePath)
+  );
 
   copySharedDocs(claudeDir);
 }
