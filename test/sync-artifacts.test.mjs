@@ -281,7 +281,7 @@ test('background-session-start is an explicit OAuth capture skill', () => {
     rendered,
     /node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/background-capture-lifecycle\.mjs" activate/
   );
-  assert.match(rendered, /mode-`0600` file under `~\/\.polygraph\/background-capture\/`/);
+  assert.match(rendered, /mode-`0600` file under\s+`~\/\.polygraph\/background-capture\/`/);
   assert.match(rendered, /sessionUrl/);
   assert.match(
     rendered,
@@ -294,11 +294,10 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /short-lived append capability/);
   assert.match(rendered, /stop\s+before repository work/i);
   assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
-  assert.match(rendered, /local-only `.claude\/settings\.local\.json`/);
-  assert.match(rendered, /adds that path to `.git\/info\/exclude`/);
   assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
-  assert.match(rendered, /native `http` hooks/);
-  assert.match(rendered, /settings watcher time to load\s+the hooks/);
+  assert.match(rendered, /`.claude\/settings\.local\.json`/);
+  assert.match(rendered, /plugin command hooks are loaded by\s+Claude before the session starts/);
+  assert.match(rendered, /do not require\s+a separate Claude tool approval or a settings reload/);
   assert.match(rendered, /survive `SessionEnd`/);
   assert.match(rendered, /including after pause\/resume/);
   assert.match(
@@ -334,7 +333,21 @@ test('Claude plugin hooks keep capture dormant until a session is activated', ()
   assert.deepEqual(hooks.Stop, [
     { hooks: [{ type: 'command', command: lifecycleCommand }] },
   ]);
-  assert.equal(hooks.SessionEnd, undefined);
+  assert.deepEqual(hooks.SessionEnd, [
+    { hooks: [{ type: 'command', command: lifecycleCommand }] },
+  ]);
+  assert.ok(
+    hooks.PreToolUse.some(
+      (group) =>
+        group.matcher === undefined &&
+        group.hooks.some(
+          (hook) => hook.type === 'command' && hook.command === lifecycleCommand,
+        ),
+    ),
+  );
+  assert.deepEqual(hooks.PostToolUseFailure, [
+    { hooks: [{ type: 'command', command: lifecycleCommand }] },
+  ]);
   assert.doesNotMatch(JSON.stringify(hooks), /"type":"mcp_tool"/);
 });
 

@@ -42,10 +42,10 @@ function activate(testFixture) {
   );
 }
 
-test('ordinary sessions are a local no-op and transmit no prompt content', () => {
+test('ordinary sessions are a local no-op and transmit no prompt content', async () => {
   const f = fixture();
   try {
-    const result = handleBackgroundCaptureHook(
+    const result = await handleBackgroundCaptureHook(
       {
         hook_event_name: 'UserPromptSubmit',
         session_id: PROVIDER_SESSION_ID,
@@ -60,42 +60,32 @@ test('ordinary sessions are a local no-op and transmit no prompt content', () =>
   }
 });
 
-test('activation installs scoped HTTP hooks without long-lived credentials', () => {
+test('activation stores a scoped capability for preloaded plugin hooks', () => {
   const f = fixture();
   try {
     const state = activate(f);
     assert.equal(state.version, 3);
-    assert.equal(state.captureMode, 'native-http-hooks');
+    assert.equal(state.captureMode, 'plugin-command-http');
+    assert.equal(state.captureHookUrl, CAPTURE_HOOK_URL);
+    assert.equal(existsSync(f.settingsPath), false);
 
-    const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
-    assert(settings.hooks.UserPromptSubmit);
-    assert.equal(settings.hooks.MessageDisplay, undefined);
-    assert(settings.hooks.Stop);
-    assert(settings.hooks.PreToolUse);
-    assert(settings.hooks.PostToolUse);
-    assert(settings.hooks.PostToolUseFailure);
-    assert.equal('matcher' in settings.hooks.UserPromptSubmit[0], false);
-    assert.equal('matcher' in settings.hooks.Stop[0], false);
-    assert.deepEqual(settings.hooks.Stop[0].hooks[0], {
-      type: 'http',
-      url: CAPTURE_HOOK_URL,
-      timeout: 30,
-    });
-    assert.deepEqual(
-      settings.hooks.UserPromptExpansion[0].hooks[0],
-      settings.hooks.Stop[0].hooks[0],
+    const marker = readFileSync(
+      join(
+        f.root,
+        'background-capture',
+        `claude-${PROVIDER_SESSION_ID}.json`,
+      ),
+      'utf8',
     );
-    assert.deepEqual(
-      settings.hooks.PostCompact[0].hooks[0],
-      settings.hooks.Stop[0].hooks[0],
-    );
-    assert.doesNotMatch(readFileSync(f.settingsPath, 'utf8'), /token|secret/i);
+    assert.match(marker, /plugin-command-http/);
+    assert.match(marker, /pch_test-capability/);
+    assert.doesNotMatch(marker, /service.account|client.secret|bearer/i);
   } finally {
     f.cleanup();
   }
 });
 
-test('default activation uses Git-excluded project-local settings', () => {
+test('default activation does not create project-local hook settings', () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, '.git', 'info'), { recursive: true });
@@ -105,19 +95,17 @@ test('default activation uses Git-excluded project-local settings', () => {
       now: 1_000,
     });
 
-    const settingsPath = join(f.root, '.claude', 'settings.local.json');
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    assert(settings.hooks.UserPromptSubmit);
-    assert.match(
-      readFileSync(join(f.root, '.git', 'info', 'exclude'), 'utf8'),
-      /^\/.claude\/settings\.local\.json$/m,
+    assert.equal(
+      existsSync(join(f.root, '.claude', 'settings.local.json')),
+      false,
     );
+    assert.equal(existsSync(join(f.root, '.git', 'info', 'exclude')), false);
   } finally {
     f.cleanup();
   }
 });
 
-test('activation preserves existing settings and is idempotent', () => {
+test('activation removes stale direct hooks and preserves other settings', () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, '.claude'), { recursive: true });
@@ -134,44 +122,53 @@ test('activation preserves existing settings and is idempotent', () => {
       }),
     );
     activate(f);
-    activate(f);
     const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
     assert.equal(settings.theme, 'dark');
-    assert.equal(settings.hooks.UserPromptSubmit.length, 3);
+    assert.equal(settings.hooks.UserPromptSubmit.length, 2);
     assert.equal(
       settings.hooks.UserPromptSubmit[1].hooks[0].url,
       'https://%'
     );
-    assert.equal(
-      settings.hooks.UserPromptSubmit.filter(
-        (group) => group.hooks[0].url === CAPTURE_HOOK_URL,
-      ).length,
-      1,
-    );
   } finally {
     f.cleanup();
   }
 });
 
-test('activated command hooks become no-ops so events are not duplicated', () => {
+test('activated plugin hooks forward events through the scoped capability', async () => {
   const f = fixture();
   try {
     activate(f);
-    for (const hook_event_name of ['UserPromptSubmit', 'Stop', 'SessionStart']) {
+    const requests = [];
+    const fetchImpl = async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, status: 200 };
+    };
+    for (const hook_event_name of [
+      'UserPromptSubmit',
+      'Stop',
+      'PreToolUse',
+    ]) {
       assert.deepEqual(
-        handleBackgroundCaptureHook(
-          { hook_event_name, session_id: PROVIDER_SESSION_ID },
-          { root: f.root },
+        await handleBackgroundCaptureHook(
+          { hook_event_name, session_id: PROVIDER_SESSION_ID, prompt: 'hello' },
+          { root: f.root, fetchImpl },
         ),
         { exitCode: 0, stdout: '', stderr: '' },
       );
     }
+    assert.equal(requests.length, 3);
+    assert(requests.every(({ url }) => url === CAPTURE_HOOK_URL));
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: PROVIDER_SESSION_ID,
+      prompt: 'hello',
+    });
   } finally {
     f.cleanup();
   }
 });
 
-test('deactivation removes only Polygraph-owned hooks and the marker', () => {
+test('deactivation removes only Polygraph-owned hooks and the marker', async () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, '.claude'), { recursive: true });
@@ -196,7 +193,7 @@ test('deactivation removes only Polygraph-owned hooks and the marker', () => {
     ]);
     assert.equal(settings.hooks.UserPromptSubmit, undefined);
     assert.deepEqual(
-      handleBackgroundCaptureHook(
+      await handleBackgroundCaptureHook(
         { hook_event_name: 'UserPromptSubmit', session_id: PROVIDER_SESSION_ID },
         { root: f.root },
       ),

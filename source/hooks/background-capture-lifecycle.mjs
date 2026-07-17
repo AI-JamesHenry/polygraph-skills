@@ -153,8 +153,11 @@ export function activateBackgroundCapture(
 ) {
   providerSessionId = safeProviderSessionId(providerSessionId);
   captureHookUrl = safeCaptureHookUrl(captureHookUrl);
-  ensureLocalSettingsIgnored(projectDir, settingsPath);
-  installDirectCaptureHooks(settingsPath, captureHookUrl);
+  // Claude loads hook configuration when the agent process starts. Writing a
+  // native HTTP hook here would not become active until a later resume. The
+  // plugin command hooks are already loaded, so activation only needs to
+  // persist the session-scoped capability that those hooks forward to.
+  removeDirectCaptureHooks(settingsPath);
   const path = markerPath(providerSessionId, root);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 
@@ -163,7 +166,8 @@ export function activateBackgroundCapture(
     provider: 'claude',
     providerSessionId,
     activatedAt: now,
-    captureMode: 'native-http-hooks',
+    captureMode: 'plugin-command-http',
+    captureHookUrl,
     settingsPath,
   };
   const temporaryPath = `${path}.${process.pid}.tmp`;
@@ -280,6 +284,9 @@ function readBackgroundCapture(providerSessionId, root = defaultRoot()) {
     ) {
       return null;
     }
+    if (state.version === 3) {
+      state.captureHookUrl = safeCaptureHookUrl(state.captureHookUrl);
+    }
     return state;
   } catch {
     return null;
@@ -335,13 +342,37 @@ function responseCaptureInstruction(providerSessionId, response) {
   ].join('\n');
 }
 
-export function handleBackgroundCaptureHook(
+export async function handleBackgroundCaptureHook(
   input,
-  { root = defaultRoot() } = {}
+  { root = defaultRoot(), fetchImpl = globalThis.fetch } = {}
 ) {
   const providerSessionId = input?.session_id;
   const state = readBackgroundCapture(providerSessionId, root);
   if (!state) return emptyResult();
+  if (state.version === 3) {
+    try {
+      const response = await fetchImpl(state.captureHookUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) {
+        return {
+          exitCode: 0,
+          stdout: '',
+          stderr: `Polygraph capture hook returned HTTP ${response.status}.\n`,
+        };
+      }
+    } catch (error) {
+      return {
+        exitCode: 0,
+        stdout: '',
+        stderr: `Polygraph capture hook failed: ${error instanceof Error ? error.message : 'unknown error'}.\n`,
+      };
+    }
+    return emptyResult();
+  }
   if (state.version >= 2) return emptyResult();
 
   switch (input?.hook_event_name) {
@@ -381,7 +412,7 @@ function readStdin() {
   }
 }
 
-function runCli() {
+async function runCli() {
   if (process.argv[2] === 'activate') {
     activateBackgroundCapture(
       process.env.CLAUDE_CODE_SESSION_ID,
@@ -394,7 +425,7 @@ function runCli() {
     return;
   }
 
-  const result = handleBackgroundCaptureHook(readStdin());
+  const result = await handleBackgroundCaptureHook(readStdin());
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;
@@ -404,4 +435,4 @@ const isMain =
   process.argv[1] &&
   resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
-if (isMain) runCli();
+if (isMain) await runCli();
