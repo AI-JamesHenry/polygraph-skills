@@ -22,7 +22,6 @@ const OWNED_HOOK_MARKER = 'polygraph-background-capture-v2';
 
 function captureHook(input) {
   return {
-    matcher: '',
     hooks: [
       {
         type: 'mcp_tool',
@@ -43,14 +42,6 @@ const DIRECT_CAPTURE_HOOKS = {
     eventType: 'user_prompt',
     content: '${prompt}',
     eventId: 'prompt:${prompt_id}',
-  }),
-  MessageDisplay: captureHook({
-    eventType: 'assistant_delta',
-    content: '${delta}',
-    eventId: 'message:${message_id}:${index}',
-    messageId: '${message_id}',
-    index: '${index}',
-    final: '${final}',
   }),
   Stop: captureHook({
     eventType: 'assistant_snapshot',

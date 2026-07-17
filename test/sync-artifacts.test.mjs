@@ -303,7 +303,7 @@ test('background-session-start is an explicit OAuth capture skill', () => {
     rendered,
     /never\s+invoke this skill do not transmit prompt content/,
   );
-  assert.match(rendered, /captures exact user prompts, streamed assistant text, tool/);
+  assert.match(rendered, /captures exact user prompts, final assistant text, tool/);
   assert.match(rendered, /does not expose thinking text through hooks/);
   assert.match(
     rendered,

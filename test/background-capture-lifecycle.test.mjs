@@ -63,27 +63,13 @@ test('activation installs native MCP hooks without credentials', () => {
 
     const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
     assert(settings.hooks.UserPromptSubmit);
-    assert(settings.hooks.MessageDisplay);
+    assert.equal(settings.hooks.MessageDisplay, undefined);
     assert(settings.hooks.Stop);
     assert(settings.hooks.PreToolUse);
     assert(settings.hooks.PostToolUse);
     assert(settings.hooks.PostToolUseFailure);
-    const handler = settings.hooks.MessageDisplay[0].hooks[0];
-    assert.deepEqual(handler, {
-      type: 'mcp_tool',
-      server: 'polygraph-oauth-spike',
-      tool: 'background_capture_event',
-      input: {
-        eventType: 'assistant_delta',
-        content: '${delta}',
-        eventId: 'message:${message_id}:${index}',
-        messageId: '${message_id}',
-        index: '${index}',
-        final: '${final}',
-        providerSessionId: '${session_id}',
-        captureSource: 'polygraph-background-capture-v2',
-      },
-    });
+    assert.equal('matcher' in settings.hooks.UserPromptSubmit[0], false);
+    assert.equal('matcher' in settings.hooks.Stop[0], false);
     assert.deepEqual(settings.hooks.Stop[0].hooks[0], {
       type: 'mcp_tool',
       server: 'polygraph-oauth-spike',

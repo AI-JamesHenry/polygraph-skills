@@ -90,7 +90,7 @@ do not modify or commit that file yourself. Do not invoke `connector_probe`.
 
 ## Current capture boundary
 
-This spike captures exact user prompts, streamed assistant text, tool
+This spike captures exact user prompts, final assistant text, tool
 calls/results/failures, and the lifecycle events exposed by Claude Code hooks in
 the same provider session, including after pause/resume. Sessions that never
 invoke this skill do not transmit prompt content to Polygraph.
