@@ -16,161 +16,52 @@ import { fileURLToPath } from 'node:url';
 
 const CONNECTOR_TOOL =
   'mcp__polygraph-oauth-spike__background_capture_event';
-const CONNECTOR_SERVER = 'polygraph-oauth-spike';
-const CAPTURE_TOOL = 'background_capture_event';
-const OWNED_HOOK_MARKER = 'polygraph-background-capture-v2';
+const CAPTURE_HOOK_PATH = '/hooks/capture/pch_';
 
-function captureHook(input) {
+function captureHook(captureHookUrl) {
   return {
     hooks: [
       {
-        type: 'mcp_tool',
-        server: CONNECTOR_SERVER,
-        tool: CAPTURE_TOOL,
-        input: {
-          ...input,
-          providerSessionId: '${session_id}',
-          captureSource: OWNED_HOOK_MARKER,
-        },
+        type: 'http',
+        url: captureHookUrl,
+        timeout: 30,
       },
     ],
   };
 }
 
-const DIRECT_CAPTURE_HOOKS = {
-  UserPromptSubmit: captureHook({
-    eventType: 'user_prompt',
-    content: '${prompt}',
-    eventId: 'prompt:${prompt_id}',
-  }),
-  Stop: captureHook({
-    eventType: 'assistant_snapshot',
-    content: '${last_assistant_message}',
-  }),
-  PreToolUse: captureHook({
-    eventType: 'tool_use',
-    content: '${tool_input}',
-    eventId: 'tool-use:${tool_use_id}',
-    toolName: '${tool_name}',
-    toolUseId: '${tool_use_id}',
-  }),
-  PostToolUse: captureHook({
-    eventType: 'tool_result',
-    content: '${tool_response}',
-    eventId: 'tool-result:${tool_use_id}',
-    toolName: '${tool_name}',
-    toolUseId: '${tool_use_id}',
-    durationMs: '${duration_ms}',
-  }),
-  PostToolUseFailure: captureHook({
-    eventType: 'tool_failure',
-    content: '${error}',
-    eventId: 'tool-failure:${tool_use_id}',
-    toolName: '${tool_name}',
-    toolUseId: '${tool_use_id}',
-    durationMs: '${duration_ms}',
-    detail: '${tool_input}',
-  }),
-  Notification: captureHook({
-    eventType: 'event',
-    content: '${message}',
-    label: 'Notification: ${notification_type}',
-    detail: '${title}',
-  }),
-  InstructionsLoaded: captureHook({
-    eventType: 'event',
-    content: '${file_path}',
-    label: 'Instructions loaded: ${memory_type}',
-    detail: '${load_reason}',
-  }),
-  UserPromptExpansion: captureHook({
-    eventType: 'skill_load',
-    content: '${command_source}',
-    label: '${command_name}',
-    detail: '${prompt}\n${command_args}',
-  }),
-  PermissionRequest: captureHook({
-    eventType: 'event',
-    content: '${tool_input}',
-    eventId: 'permission-request:${tool_use_id}',
-    label: 'Permission requested: ${tool_name}',
-  }),
-  PermissionDenied: captureHook({
-    eventType: 'event',
-    content: '${tool_input}',
-    eventId: 'permission-denied:${tool_use_id}',
-    label: 'Permission denied: ${tool_name}',
-    detail: '${reason}',
-  }),
-  ConfigChange: captureHook({
-    eventType: 'event',
-    content: '${source}',
-    label: 'Configuration changed',
-    detail: '${file_path}',
-  }),
-  SubagentStart: captureHook({
-    eventType: 'event',
-    content: '${agent_type}',
-    eventId: 'subagent-start:${agent_id}',
-    label: 'Subagent started',
-    detail: '${agent_id}',
-  }),
-  SubagentStop: captureHook({
-    eventType: 'task_notification',
-    content: '${last_assistant_message}',
-    eventId: 'subagent-stop:${agent_id}',
-    label: '${agent_type}',
-    taskId: '${agent_id}',
-    outputFile: '${agent_transcript_path}',
-    status: 'completed',
-  }),
-  PostCompact: captureHook({
-    eventType: 'event',
-    content: '${compact_summary}',
-    label: 'Context compacted',
-  }),
-  StopFailure: captureHook({
-    eventType: 'event',
-    content: '${last_assistant_message}',
-    label: 'Assistant stop failed: ${error}',
-    detail: '${error_details}',
-  }),
-  SessionStart: captureHook({
-    eventType: 'system',
-    content: 'Claude session ${source}',
-    label: 'session-start',
-  }),
-  SessionEnd: captureHook({
-    eventType: 'system',
-    content: 'Claude session ended: ${reason}',
-    label: 'session-end',
-  }),
-  CwdChanged: captureHook({
-    eventType: 'event',
-    content: '${old_cwd}\n${new_cwd}',
-    label: 'Working directory changed',
-  }),
-  TaskCreated: captureHook({
-    eventType: 'task_notification',
-    content: '${description}',
-    label: '${subject}',
-    taskId: '${task_id}',
-    status: 'created',
-  }),
-  TaskCompleted: captureHook({
-    eventType: 'task_notification',
-    content: '${description}',
-    label: '${subject}',
-    taskId: '${task_id}',
-    status: 'completed',
-  }),
-  TeammateIdle: captureHook({
-    eventType: 'event',
-    content: '${teammate_name}',
-    label: 'Teammate idle',
-    detail: '${team_name}',
-  }),
-};
+const DIRECT_CAPTURE_EVENTS = [
+  'UserPromptSubmit',
+  'Stop',
+  'PreToolUse',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'Notification',
+  'InstructionsLoaded',
+  'UserPromptExpansion',
+  'PermissionRequest',
+  'PermissionDenied',
+  'ConfigChange',
+  'SubagentStart',
+  'SubagentStop',
+  'PostCompact',
+  'StopFailure',
+  'SessionStart',
+  'SessionEnd',
+  'CwdChanged',
+  'TaskCreated',
+  'TaskCompleted',
+  'TeammateIdle',
+];
+
+function directCaptureHooks(captureHookUrl) {
+  return Object.fromEntries(
+    DIRECT_CAPTURE_EVENTS.map((eventName) => [
+      eventName,
+      captureHook(captureHookUrl),
+    ])
+  );
+}
 
 function defaultRoot() {
   return join(homedir(), '.polygraph');
@@ -223,6 +114,25 @@ function safeProviderSessionId(providerSessionId) {
   return providerSessionId;
 }
 
+function safeCaptureHookUrl(captureHookUrl) {
+  let parsed;
+  try {
+    parsed = new URL(captureHookUrl);
+  } catch {
+    throw new Error('Invalid Polygraph capture hook URL.');
+  }
+  if (
+    parsed.protocol !== 'https:' ||
+    !parsed.pathname.startsWith(CAPTURE_HOOK_PATH) ||
+    parsed.search ||
+    parsed.hash ||
+    captureHookUrl.length > 2_000
+  ) {
+    throw new Error('Invalid Polygraph capture hook URL.');
+  }
+  return parsed.toString();
+}
+
 function markerPath(providerSessionId, root = defaultRoot()) {
   return join(
     root,
@@ -233,6 +143,7 @@ function markerPath(providerSessionId, root = defaultRoot()) {
 
 export function activateBackgroundCapture(
   providerSessionId,
+  captureHookUrl,
   {
     root = defaultRoot(),
     now = Date.now(),
@@ -241,17 +152,18 @@ export function activateBackgroundCapture(
   } = {}
 ) {
   providerSessionId = safeProviderSessionId(providerSessionId);
+  captureHookUrl = safeCaptureHookUrl(captureHookUrl);
   ensureLocalSettingsIgnored(projectDir, settingsPath);
-  installDirectCaptureHooks(settingsPath);
+  installDirectCaptureHooks(settingsPath, captureHookUrl);
   const path = markerPath(providerSessionId, root);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 
   const state = {
-    version: 2,
+    version: 3,
     provider: 'claude',
     providerSessionId,
     activatedAt: now,
-    captureMode: 'native-mcp-hooks',
+    captureMode: 'native-http-hooks',
     settingsPath,
   };
   const temporaryPath = `${path}.${process.pid}.tmp`;
@@ -284,21 +196,30 @@ function writeJsonAtomically(path, value) {
   renameSync(temporaryPath, path);
 }
 
+function isOwnedCaptureHookUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('https://')) return false;
+  try {
+    return new URL(url).pathname.startsWith(CAPTURE_HOOK_PATH);
+  } catch {
+    return false;
+  }
+}
+
 function isOwnedCaptureHook(group) {
   return group?.hooks?.some(
     (hook) =>
-      hook?.type === 'mcp_tool' &&
-      hook?.server === CONNECTOR_SERVER &&
-      hook?.tool === CAPTURE_TOOL &&
-      hook?.input?.captureSource === OWNED_HOOK_MARKER
+      hook?.type === 'http' &&
+      isOwnedCaptureHookUrl(hook.url)
   );
 }
 
-export function installDirectCaptureHooks(settingsPath) {
+export function installDirectCaptureHooks(settingsPath, captureHookUrl) {
   const settings = readJsonObject(settingsPath);
   const hooks =
     settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {};
-  for (const [eventName, ownedGroup] of Object.entries(DIRECT_CAPTURE_HOOKS)) {
+  for (const [eventName, ownedGroup] of Object.entries(
+    directCaptureHooks(safeCaptureHookUrl(captureHookUrl))
+  )) {
     const existing = Array.isArray(hooks[eventName]) ? hooks[eventName] : [];
     hooks[eventName] = [
       ...existing.filter((group) => !isOwnedCaptureHook(group)),
@@ -314,7 +235,7 @@ export function removeDirectCaptureHooks(settingsPath) {
   const settings = readJsonObject(settingsPath);
   const hooks =
     settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {};
-  for (const eventName of Object.keys(DIRECT_CAPTURE_HOOKS)) {
+  for (const eventName of DIRECT_CAPTURE_EVENTS) {
     if (!Array.isArray(hooks[eventName])) continue;
     const remaining = hooks[eventName].filter(
       (group) => !isOwnedCaptureHook(group)
@@ -352,7 +273,7 @@ function readBackgroundCapture(providerSessionId, root = defaultRoot()) {
   try {
     const state = JSON.parse(readFileSync(path, 'utf8'));
     if (
-      ![1, 2].includes(state?.version) ||
+      ![1, 2, 3].includes(state?.version) ||
       state?.provider !== 'claude' ||
       state?.providerSessionId !== providerSessionId ||
       !Number.isFinite(state?.activatedAt)
@@ -421,7 +342,7 @@ export function handleBackgroundCaptureHook(
   const providerSessionId = input?.session_id;
   const state = readBackgroundCapture(providerSessionId, root);
   if (!state) return emptyResult();
-  if (state.version === 2) return emptyResult();
+  if (state.version >= 2) return emptyResult();
 
   switch (input?.hook_event_name) {
     case 'UserPromptSubmit':
@@ -462,7 +383,10 @@ function readStdin() {
 
 function runCli() {
   if (process.argv[2] === 'activate') {
-    activateBackgroundCapture(process.env.CLAUDE_CODE_SESSION_ID);
+    activateBackgroundCapture(
+      process.env.CLAUDE_CODE_SESSION_ID,
+      process.argv[3]
+    );
     return;
   }
   if (process.argv[2] === 'deactivate') {

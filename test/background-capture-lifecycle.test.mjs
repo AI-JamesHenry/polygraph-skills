@@ -18,6 +18,8 @@ import {
 } from '../source/hooks/background-capture-lifecycle.mjs';
 
 const PROVIDER_SESSION_ID = '88b2ff2e-b146-458c-85fc-109c7bc12f26';
+const CAPTURE_HOOK_URL =
+  'https://polygraph.example.test/hooks/capture/pch_test-capability';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'polygraph-background-capture-'));
@@ -29,11 +31,15 @@ function fixture() {
 }
 
 function activate(testFixture) {
-  return activateBackgroundCapture(PROVIDER_SESSION_ID, {
-    root: testFixture.root,
-    settingsPath: testFixture.settingsPath,
-    now: 1_000,
-  });
+  return activateBackgroundCapture(
+    PROVIDER_SESSION_ID,
+    CAPTURE_HOOK_URL,
+    {
+      root: testFixture.root,
+      settingsPath: testFixture.settingsPath,
+      now: 1_000,
+    }
+  );
 }
 
 test('ordinary sessions are a local no-op and transmit no prompt content', () => {
@@ -54,12 +60,12 @@ test('ordinary sessions are a local no-op and transmit no prompt content', () =>
   }
 });
 
-test('activation installs native MCP hooks without credentials', () => {
+test('activation installs scoped HTTP hooks without long-lived credentials', () => {
   const f = fixture();
   try {
     const state = activate(f);
-    assert.equal(state.version, 2);
-    assert.equal(state.captureMode, 'native-mcp-hooks');
+    assert.equal(state.version, 3);
+    assert.equal(state.captureMode, 'native-http-hooks');
 
     const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
     assert(settings.hooks.UserPromptSubmit);
@@ -71,27 +77,17 @@ test('activation installs native MCP hooks without credentials', () => {
     assert.equal('matcher' in settings.hooks.UserPromptSubmit[0], false);
     assert.equal('matcher' in settings.hooks.Stop[0], false);
     assert.deepEqual(settings.hooks.Stop[0].hooks[0], {
-      type: 'mcp_tool',
-      server: 'polygraph-oauth-spike',
-      tool: 'background_capture_event',
-      input: {
-        eventType: 'assistant_snapshot',
-        content: '${last_assistant_message}',
-        providerSessionId: '${session_id}',
-        captureSource: 'polygraph-background-capture-v2',
-      },
+      type: 'http',
+      url: CAPTURE_HOOK_URL,
+      timeout: 30,
     });
-    assert.deepEqual(settings.hooks.UserPromptExpansion[0].hooks[0].input, {
-      eventType: 'skill_load',
-      content: '${command_source}',
-      label: '${command_name}',
-      detail: '${prompt}\n${command_args}',
-      providerSessionId: '${session_id}',
-      captureSource: 'polygraph-background-capture-v2',
-    });
-    assert.equal(
-      settings.hooks.PostCompact[0].hooks[0].input.content,
-      '${compact_summary}',
+    assert.deepEqual(
+      settings.hooks.UserPromptExpansion[0].hooks[0],
+      settings.hooks.Stop[0].hooks[0],
+    );
+    assert.deepEqual(
+      settings.hooks.PostCompact[0].hooks[0],
+      settings.hooks.Stop[0].hooks[0],
     );
     assert.doesNotMatch(readFileSync(f.settingsPath, 'utf8'), /token|secret/i);
   } finally {
@@ -103,7 +99,7 @@ test('default activation uses Git-excluded project-local settings', () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, '.git', 'info'), { recursive: true });
-    activateBackgroundCapture(PROVIDER_SESSION_ID, {
+    activateBackgroundCapture(PROVIDER_SESSION_ID, CAPTURE_HOOK_URL, {
       root: f.root,
       projectDir: f.root,
       now: 1_000,
@@ -132,6 +128,7 @@ test('activation preserves existing settings and is idempotent', () => {
         hooks: {
           UserPromptSubmit: [
             { hooks: [{ type: 'command', command: 'existing-hook' }] },
+            { hooks: [{ type: 'http', url: 'https://%' }] },
           ],
         },
       }),
@@ -140,10 +137,14 @@ test('activation preserves existing settings and is idempotent', () => {
     activate(f);
     const settings = JSON.parse(readFileSync(f.settingsPath, 'utf8'));
     assert.equal(settings.theme, 'dark');
-    assert.equal(settings.hooks.UserPromptSubmit.length, 2);
+    assert.equal(settings.hooks.UserPromptSubmit.length, 3);
+    assert.equal(
+      settings.hooks.UserPromptSubmit[1].hooks[0].url,
+      'https://%'
+    );
     assert.equal(
       settings.hooks.UserPromptSubmit.filter(
-        (group) => group.hooks[0].type === 'mcp_tool',
+        (group) => group.hooks[0].url === CAPTURE_HOOK_URL,
       ).length,
       1,
     );

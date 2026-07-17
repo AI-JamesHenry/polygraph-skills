@@ -55,22 +55,27 @@ before repository work.
      3;
    - `capture.status` equal to `started`;
    - `capture.eventType` equal to `user_prompt`;
-   - `capture.received` equal to `1`.
+   - `capture.received` equal to `1`;
+   - a non-empty HTTPS `captureHookUrl`. Treat this URL as a scoped,
+     short-lived append capability: never print it or include it in the
+     user-facing response.
 6. Activate continued capture by running this plugin helper exactly once:
 
    ```text
-   node "${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs" activate && sleep 2
+   node "${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs" activate "<captureHookUrl from step 5>" && sleep 2
    ```
 
    The helper writes only the current provider session ID and an activation
    timestamp to a mode-`0600` file under `~/.polygraph/background-capture/`.
-   It also merges Polygraph-owned native `mcp_tool` hooks into the isolated
+   It also merges Polygraph-owned native `http` hooks into the isolated
    checkout's local-only `.claude/settings.local.json`, which is the hook scope
    loaded by Claude Web. The helper adds that path to `.git/info/exclude`, so it
-   never dirties or changes the tracked repository. Those hooks call only the
-   already-authorized connector; existing local settings and hooks are
-   preserved. The two-second delay gives Claude's settings watcher time to load
-   the hooks before repository work begins. The activation marker and hooks
+   never dirties or changes the tracked repository. Those hooks POST only to
+   the short-lived, session-bound capability minted by the already-authorized
+   connector; they do not require a separate Claude tool approval. Existing
+   local settings and hooks are preserved. The two-second delay gives Claude's
+   settings watcher time to load the hooks before repository work begins. The
+   activation marker and hooks
    deliberately survive `SessionEnd`, because Claude Web uses that event when
    pausing a worker between ordinary turns. It does not read or persist an
    OAuth token. Require the command to succeed.
@@ -79,10 +84,11 @@ before repository work.
 
 Do not call `background_capture_event` yourself during start. The connector
 records the initial task atomically with session creation. After activation,
-native Claude hooks call the already-connected OAuth connector directly. They
-do not ask the model to relay capture events and do not place a Polygraph secret
-in the worker. Ongoing hook delivery is best-effort because Claude treats hook
-transport failures as non-blocking.
+native Claude HTTP hooks call the scoped append endpoint directly. They do not
+ask the model to relay capture events and do not place a long-lived Polygraph
+credential in the worker. The capability cannot read Polygraph data and is
+bound to this provider session. Ongoing hook delivery is best-effort because
+Claude treats hook transport failures as non-blocking.
 
 Do not create or edit `.claude/settings.json`. The activation helper owns only
 its exact entries in the local-only, Git-excluded `.claude/settings.local.json`;

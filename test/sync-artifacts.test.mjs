@@ -290,12 +290,14 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /providerSessionId.*exactly equal to the concrete value/is);
   assert.match(rendered, /never\s+pass `\$CLAUDE_CODE_SESSION_ID`/i);
   assert.match(rendered, /capture\.status.*started/);
+  assert.match(rendered, /captureHookUrl/);
+  assert.match(rendered, /short-lived append capability/);
   assert.match(rendered, /stop\s+before repository work/i);
   assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
   assert.match(rendered, /local-only `.claude\/settings\.local\.json`/);
   assert.match(rendered, /adds that path to `.git\/info\/exclude`/);
   assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
-  assert.match(rendered, /native `mcp_tool` hooks/);
+  assert.match(rendered, /native `http` hooks/);
   assert.match(rendered, /settings watcher time to load\s+the hooks/);
   assert.match(rendered, /survive `SessionEnd`/);
   assert.match(rendered, /including after pause\/resume/);
