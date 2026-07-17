@@ -65,27 +65,31 @@ before repository work.
    node "${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs" activate "<captureHookUrl from step 5>"
    ```
 
-   The helper writes the current provider session ID, activation timestamp, and
-   short-lived append capability to a mode-`0600` file under
-   `~/.polygraph/background-capture/`. The plugin command hooks are loaded by
-   Claude before the session starts and remain inert until this marker exists.
-   Once activated, they POST raw hook events only to the session-bound
-   capability minted by the already-authorized connector; they do not require
-   a separate Claude tool approval or a settings reload. The activation marker
-   and plugin hooks
-   deliberately survive `SessionEnd`, because Claude Web uses that event when
-   pausing a worker between ordinary turns. It does not read or persist an
-   OAuth token. Require the command to succeed.
+   The helper locates the current Claude JSONL transcript, records the byte
+   offset of this opted-in skill invocation, and starts a detached transcript
+   sidecar. The sidecar uses the same production Claude transcript adapter and
+   secret redactor as a local Polygraph session, then POSTs normalized log
+   lines only to the session-bound capability minted by the already-authorized
+   connector. It captures from the opt-in prompt onward; earlier prompts in
+   the same Claude session are not transmitted. The helper writes only the
+   current provider session ID, transcript path and start offset, activation
+   timestamp, and short-lived append capability to mode-`0600` files under
+   `~/.polygraph/background-capture/`. It never reads or persists an OAuth
+   token. Preloaded plugin hooks remain inert without this marker and act only
+   as sidecar health/restart triggers after activation, including after Claude
+   pauses and resumes a worker. They do not duplicate transcript events, need
+   a separate Claude tool approval, or require a settings reload. Require the
+   activation command to succeed.
 7. Print the non-secret Polygraph session ID and URL. Only then continue with the user's
    task.
 
 Do not call `background_capture_event` yourself during start. The connector
 records the initial task atomically with session creation. After activation,
-preloaded plugin command hooks call the scoped append endpoint directly. They do not
-ask the model to relay capture events and do not place a long-lived Polygraph
-credential in the worker. The capability cannot read Polygraph data and is
-bound to this provider session. Ongoing hook delivery is best-effort because
-Claude treats hook transport failures as non-blocking.
+the detached sidecar tails the provider transcript directly; the model does
+not relay capture events and no long-lived Polygraph credential is placed in
+the worker. The capability cannot read Polygraph data and is bound to this
+provider session. Transcript delivery is retried by replaying from the stable
+opt-in byte offset; source-offset event IDs make restarts idempotent.
 
 Do not create or edit `.claude/settings.json` or
 `.claude/settings.local.json`. Continued capture is owned by the plugin hooks
@@ -93,16 +97,15 @@ and the mode-`0600` activation marker. Do not invoke `connector_probe`.
 
 ## Current capture boundary
 
-This spike captures exact user prompts, final assistant text, tool
-calls/results/failures, and the lifecycle events exposed by Claude Code hooks in
-the same provider session, including after pause/resume. Sessions that never
-invoke this skill do not transmit prompt content to Polygraph.
-
-Claude does not expose thinking text through hooks, and its provider transcript
-contains only empty signed thinking blocks in this environment. Capture is
-therefore deliberately near-parity rather than a byte-for-byte provider-native
-transcript. Fresh worker replacement is not yet proven. Report those boundaries
-accurately.
+This spike uses the same Claude JSONL adapter as local Polygraph capture. From
+the explicit opt-in prompt onward it can preserve user prompts, assistant text
+and available thinking blocks, structured tool calls/results/failures, system
+and lifecycle entries, and skill-load correlation in the same provider
+session, including warm follow-ups and pause/resume. Sessions that never invoke
+this skill do not transmit transcript content to Polygraph. Provider records
+that contain only an opaque or empty signed thinking block cannot be expanded;
+report that provider limitation accurately rather than claiming hidden
+reasoning was captured.
 
 The provider continues to own checkout, branch creation, commits, pushes, and
 pull request creation. Do not create or associate a pull request unless the

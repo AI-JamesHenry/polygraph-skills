@@ -281,7 +281,7 @@ test('background-session-start is an explicit OAuth capture skill', () => {
     rendered,
     /node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/background-capture-lifecycle\.mjs" activate/
   );
-  assert.match(rendered, /mode-`0600` file under\s+`~\/\.polygraph\/background-capture\/`/);
+  assert.match(rendered, /mode-`0600` files under\s+`~\/\.polygraph\/background-capture\/`/);
   assert.match(rendered, /sessionUrl/);
   assert.match(
     rendered,
@@ -296,16 +296,19 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /Do not call `background_capture_event` yourself during start/);
   assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
   assert.match(rendered, /`.claude\/settings\.local\.json`/);
-  assert.match(rendered, /plugin command hooks are loaded by\s+Claude before the session starts/);
-  assert.match(rendered, /do not require\s+a separate Claude tool approval or a settings reload/);
-  assert.match(rendered, /survive `SessionEnd`/);
-  assert.match(rendered, /including after pause\/resume/);
+  assert.match(rendered, /same production Claude transcript adapter/);
+  assert.match(rendered, /stable\s+opt-in byte offset/);
+  assert.match(rendered, /do not duplicate transcript events/);
+  assert.match(rendered, /separate Claude tool approval/);
+  assert.match(rendered, /pauses and resumes a worker/);
+  assert.match(rendered, /including warm follow-ups and pause\/resume/);
   assert.match(
     rendered,
-    /never\s+invoke this skill do not transmit prompt content/,
+    /never\s+invoke\s+this skill do not transmit transcript content/,
   );
-  assert.match(rendered, /captures exact user prompts, final assistant text, tool/);
-  assert.match(rendered, /does not expose thinking text through hooks/);
+  assert.match(rendered, /preserve user prompts, assistant text/);
+  assert.match(rendered, /available thinking blocks/);
+  assert.match(rendered, /opaque or empty signed thinking block cannot be expanded/);
   assert.match(
     rendered,
     /provider continues to own.*branch creation.*commits.*pushes.*pull request creation/is

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   renameSync,
@@ -17,6 +19,19 @@ import { fileURLToPath } from 'node:url';
 const CONNECTOR_TOOL =
   'mcp__polygraph-oauth-spike__background_capture_event';
 const CAPTURE_HOOK_PATH = '/hooks/capture/pch_';
+const SIDECAR_READY_TIMEOUT_MS = 15_000;
+const SIDECAR_POLL_INTERVAL_MS = 100;
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const HOSTED_SIDECAR_ENTRY = resolve(
+  MODULE_DIR,
+  '..',
+  'wip-mcp',
+  'vendor',
+  'bin',
+  'lib',
+  'polygraph',
+  'hosted-parent-log-sidecar-entry.js'
+);
 
 function captureHook(captureHookUrl) {
   return {
@@ -141,7 +156,191 @@ function markerPath(providerSessionId, root = defaultRoot()) {
   );
 }
 
-export function activateBackgroundCapture(
+function runtimePath(providerSessionId, root = defaultRoot()) {
+  return join(
+    root,
+    'background-capture',
+    `claude-${safeProviderSessionId(providerSessionId)}.sidecar.json`
+  );
+}
+
+function readRuntimeState(path) {
+  if (!existsSync(path)) return null;
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function locateClaudeTranscript(providerSessionId, home = homedir()) {
+  const projectsRoot = join(home, '.claude', 'projects');
+  if (!existsSync(projectsRoot)) return null;
+  const candidates = [];
+  for (const projectName of readdirSync(projectsRoot)) {
+    const candidate = join(
+      projectsRoot,
+      projectName,
+      `${safeProviderSessionId(providerSessionId)}.jsonl`
+    );
+    if (!existsSync(candidate)) continue;
+    candidates.push({ path: candidate, mtimeMs: statSync(candidate).mtimeMs });
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.path ?? null;
+}
+
+function captureStartOffset(transcriptPath) {
+  const content = readFileSync(transcriptPath);
+  let start = 0;
+  let latestUserPromptOffset = null;
+  for (let cursor = 0; cursor <= content.length; cursor += 1) {
+    if (cursor < content.length && content[cursor] !== 0x0a) continue;
+    const raw = content.subarray(start, cursor).toString('utf8');
+    if (raw.trim()) {
+      try {
+        const record = JSON.parse(raw);
+        const message =
+          record?.message && typeof record.message === 'object'
+            ? record.message
+            : record;
+        if (
+          record?.isMeta !== true &&
+          message?.role === 'user' &&
+          typeof message?.content === 'string' &&
+          message.content.trim()
+        ) {
+          latestUserPromptOffset = start;
+        }
+      } catch {
+        // Ignore an incomplete or provider-private record.
+      }
+    }
+    start = cursor + 1;
+  }
+  return latestUserPromptOffset ?? 0;
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+async function ensureHostedTranscriptSidecar(
+  state,
+  {
+    root = defaultRoot(),
+    spawnImpl = spawn,
+    now = Date.now,
+    sleepImpl = sleep,
+    entryPath = HOSTED_SIDECAR_ENTRY,
+  } = {}
+) {
+  const path = runtimePath(state.providerSessionId, root);
+  const existing = readRuntimeState(path);
+  if (
+    existing?.providerSessionId === state.providerSessionId &&
+    existing?.transcriptPath === state.transcriptPath &&
+    existing?.startOffset === state.startOffset &&
+    existing?.captureHookUrl === state.captureHookUrl &&
+    Number.isSafeInteger(existing?.byteOffset) &&
+    existsSync(state.transcriptPath) &&
+    existing.byteOffset <= statSync(state.transcriptPath).size &&
+    isProcessAlive(existing.pid)
+  ) {
+    return existing;
+  }
+  if (isProcessAlive(existing?.pid)) {
+    try {
+      process.kill(existing.pid, 'SIGTERM');
+    } catch {
+      // The stale sidecar stopped between the liveness check and signal.
+    }
+  }
+  if (!existsSync(entryPath)) {
+    throw new Error('The hosted Polygraph transcript sidecar is not installed.');
+  }
+  if (!existsSync(state.transcriptPath)) {
+    throw new Error('The Claude transcript is not available.');
+  }
+
+  rmSync(path, { force: true });
+  const child = spawnImpl(process.execPath, [entryPath], {
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      POLYGRAPH_PARENT_LOG_PARENT_SESSION_ID: state.providerSessionId,
+      POLYGRAPH_PARENT_LOG_PATH: state.transcriptPath,
+      POLYGRAPH_PARENT_LOG_RUNTIME_PATH: path,
+      POLYGRAPH_PARENT_LOG_CAPTURE_HOOK_URL: state.captureHookUrl,
+      POLYGRAPH_PARENT_LOG_START_OFFSET: String(state.startOffset),
+    },
+  });
+  child.unref?.();
+
+  const deadline = now() + SIDECAR_READY_TIMEOUT_MS;
+  while (now() < deadline) {
+    const ready = readRuntimeState(path);
+    if (
+      ready?.pid === child.pid &&
+      ready?.providerSessionId === state.providerSessionId &&
+      ready?.transcriptPath === state.transcriptPath &&
+      ready?.startOffset === state.startOffset &&
+      ready?.captureHookUrl === state.captureHookUrl
+    ) {
+      return ready;
+    }
+    if (!isProcessAlive(child.pid)) {
+      throw new Error('The hosted Polygraph transcript sidecar exited early.');
+    }
+    await sleepImpl(SIDECAR_POLL_INTERVAL_MS);
+  }
+  try {
+    process.kill(child.pid, 'SIGTERM');
+  } catch {
+    // The child already stopped.
+  }
+  throw new Error('Timed out starting the hosted Polygraph transcript sidecar.');
+}
+
+function refreshTranscriptState(
+  state,
+  root = defaultRoot(),
+  home = homedir()
+) {
+  let changed = false;
+  if (!existsSync(state.transcriptPath)) {
+    const replacement = locateClaudeTranscript(state.providerSessionId, home);
+    if (!replacement) {
+      throw new Error('The Claude transcript is not available.');
+    }
+    state.transcriptPath = replacement;
+    state.startOffset = 0;
+    changed = true;
+  } else if (statSync(state.transcriptPath).size < state.startOffset) {
+    state.startOffset = 0;
+    changed = true;
+  }
+  if (changed) {
+    writeJsonAtomically(markerPath(state.providerSessionId, root), state);
+  }
+  return state;
+}
+
+export async function activateBackgroundCapture(
   providerSessionId,
   captureHookUrl,
   {
@@ -149,25 +348,34 @@ export function activateBackgroundCapture(
     now = Date.now(),
     projectDir = defaultProjectDir(),
     settingsPath = defaultSettingsPath(projectDir),
+    transcriptPath: suppliedTranscriptPath,
+    startOffset: suppliedStartOffset,
+    home = homedir(),
+    ensureSidecar = ensureHostedTranscriptSidecar,
   } = {}
 ) {
   providerSessionId = safeProviderSessionId(providerSessionId);
   captureHookUrl = safeCaptureHookUrl(captureHookUrl);
-  // Claude loads hook configuration when the agent process starts. Writing a
-  // native HTTP hook here would not become active until a later resume. The
-  // plugin command hooks are already loaded, so activation only needs to
-  // persist the session-scoped capability that those hooks forward to.
   removeDirectCaptureHooks(settingsPath);
   const path = markerPath(providerSessionId, root);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const transcriptPath =
+    suppliedTranscriptPath ?? locateClaudeTranscript(providerSessionId, home);
+  if (!transcriptPath) {
+    throw new Error('The current Claude transcript could not be located.');
+  }
+  const startOffset =
+    suppliedStartOffset ?? captureStartOffset(transcriptPath);
 
   const state = {
-    version: 3,
+    version: 4,
     provider: 'claude',
     providerSessionId,
     activatedAt: now,
-    captureMode: 'plugin-command-http',
+    captureMode: 'transcript-sidecar',
     captureHookUrl,
+    transcriptPath,
+    startOffset,
     settingsPath,
   };
   const temporaryPath = `${path}.${process.pid}.tmp`;
@@ -177,7 +385,13 @@ export function activateBackgroundCapture(
   });
   chmodSync(temporaryPath, 0o600);
   renameSync(temporaryPath, path);
-  return state;
+  try {
+    await ensureSidecar(state, { root });
+    return state;
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
 }
 
 function readJsonObject(path) {
@@ -262,6 +476,16 @@ export function deactivateBackgroundCapture(
     state?.settingsPath ??
     defaultSettingsPath();
   removeDirectCaptureHooks(resolvedSettingsPath);
+  const sidecarRuntimePath = runtimePath(providerSessionId, root);
+  const runtime = readRuntimeState(sidecarRuntimePath);
+  if (isProcessAlive(runtime?.pid)) {
+    try {
+      process.kill(runtime.pid, 'SIGTERM');
+    } catch {
+      // The process stopped between the liveness check and signal.
+    }
+  }
+  rmSync(sidecarRuntimePath, { force: true });
   rmSync(markerPath(providerSessionId, root), { force: true });
 }
 
@@ -277,15 +501,24 @@ function readBackgroundCapture(providerSessionId, root = defaultRoot()) {
   try {
     const state = JSON.parse(readFileSync(path, 'utf8'));
     if (
-      ![1, 2, 3].includes(state?.version) ||
+      ![1, 2, 3, 4].includes(state?.version) ||
       state?.provider !== 'claude' ||
       state?.providerSessionId !== providerSessionId ||
       !Number.isFinite(state?.activatedAt)
     ) {
       return null;
     }
-    if (state.version === 3) {
+    if (state.version >= 3) {
       state.captureHookUrl = safeCaptureHookUrl(state.captureHookUrl);
+    }
+    if (
+      state.version === 4 &&
+      (state.captureMode !== 'transcript-sidecar' ||
+        typeof state.transcriptPath !== 'string' ||
+        !Number.isSafeInteger(state.startOffset) ||
+        state.startOffset < 0)
+    ) {
+      return null;
     }
     return state;
   } catch {
@@ -344,11 +577,28 @@ function responseCaptureInstruction(providerSessionId, response) {
 
 export async function handleBackgroundCaptureHook(
   input,
-  { root = defaultRoot(), fetchImpl = globalThis.fetch } = {}
+  {
+    root = defaultRoot(),
+    fetchImpl = globalThis.fetch,
+    ensureSidecar = ensureHostedTranscriptSidecar,
+    home = homedir(),
+  } = {}
 ) {
   const providerSessionId = input?.session_id;
   const state = readBackgroundCapture(providerSessionId, root);
   if (!state) return emptyResult();
+  if (state.version === 4) {
+    try {
+      await ensureSidecar(refreshTranscriptState(state, root, home), { root });
+      return emptyResult();
+    } catch (error) {
+      return {
+        exitCode: 0,
+        stdout: '',
+        stderr: `Polygraph transcript sidecar recovery failed: ${error instanceof Error ? error.message : 'unknown error'}.\n`,
+      };
+    }
+  }
   if (state.version === 3) {
     try {
       const response = await fetchImpl(state.captureHookUrl, {
@@ -414,7 +664,7 @@ function readStdin() {
 
 async function runCli() {
   if (process.argv[2] === 'activate') {
-    activateBackgroundCapture(
+    await activateBackgroundCapture(
       process.env.CLAUDE_CODE_SESSION_ID,
       process.argv[3]
     );
