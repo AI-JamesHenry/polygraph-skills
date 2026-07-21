@@ -1,18 +1,15 @@
 {
-  "name": "polygraph-plugins",
-  "description": "Polygraph skills for agent sessions, repository context, delegation, and CI visibility",
+  "name": "james-polygraph-plugins",
+  "description": "Polygraph plugins private preview",
   "owner": {
-    "name": "Nx",
-    "email": "hello@nrwl.io"
+    "name": "James Henry",
+    "email": "james@nrwl.io"
   },
   "plugins": [
     {
-      "name": "polygraph",
-      "description": "Share and resume agent work with Polygraph sessions, link repos and PRs, monitor CI, and coordinate across repository boundaries when needed.",
-      "source": {
-        "source": "npm",
-        "package": "@polygraph/claude-plugin"
-      }
+      "name": "james-polygraph",
+      "description": "Start and resume repository-bound Polygraph cloud sessions from Claude Code.",
+      "source": "./dist/claude"
     }
   ]
 }

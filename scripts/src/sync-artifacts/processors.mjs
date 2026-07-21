@@ -57,6 +57,9 @@ export function processSkills(platformKey, config) {
 
     const raw = readFileSync(srcSkillFile, 'utf-8');
     const content = renderArtifact(raw, platformKey);
+    // A skill can be gated to specific platforms with a Liquid conditional
+    // around its whole body; skip platforms where it renders to nothing.
+    if (!content.trim()) continue;
 
     const destSkillDir = join(config.outputDir, config.skillsDir, skillDir);
     mkdirSync(destSkillDir, { recursive: true });

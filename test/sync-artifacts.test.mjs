@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'smol-toml';
@@ -8,6 +8,8 @@ import { parse } from 'smol-toml';
 import { renderArtifact, rootDir } from '../scripts/src/sync-artifacts/common.mjs';
 import { processAgents, processSkills } from '../scripts/src/sync-artifacts/processors.mjs';
 import {
+  buildClaudePackageJson,
+  buildClaudePluginManifest,
   buildCodexPluginManifest,
   buildMcpConfig,
   buildOpenCodePackageJson,
@@ -426,6 +428,9 @@ test('opencode skill names are native-compatible and match their directories', (
     if (!statSync(join(skillsDir, entry)).isDirectory()) continue;
 
     const rendered = renderSkill(entry, 'opencode');
+    // Platform-gated skills render to nothing and are skipped by
+    // processSkills for this platform.
+    if (!rendered.trim()) continue;
     const name = rendered.match(/^name:\s*(.+)$/m)?.[1].trim();
 
     assert.equal(name, entry);
@@ -501,4 +506,184 @@ test('buildMcpConfig can force an MCP server agent type', () => {
       },
     },
   });
+});
+
+test('background-session-start renders the four-argument cloud-session contract for Claude', () => {
+  const rendered = renderSkill('background-session-start', 'claude');
+  const frontmatter = rendered.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+
+  assert.match(rendered, /^---\n[\s\S]*?name: background-session-start[\s\S]*?\n---\n/);
+  assert.match(rendered, /\/james-polygraph:background-session-start/);
+  assert.match(rendered, /\$ARGUMENTS/);
+  assert.match(rendered, /opt-in boundary/);
+  assert.match(rendered, /exactly one Git repository/);
+  assert.match(frontmatter, /mcp__Polygraph__background_session_start/);
+  assert.match(rendered, /`background_session_start` from the `Polygraph` connector exactly\s+once/);
+
+  // The complete required start arguments.
+  assert.match(rendered, /`task`: `\$ARGUMENTS` verbatim/);
+  assert.match(rendered, /`repository`: the canonical slug/);
+  assert.match(rendered, /`providerSessionId`: the concrete value/);
+  assert.match(rendered, /`providerSessionUrl`: the exact validated URL/);
+
+  // Literal shell-variable strings are prohibited as MCP argument values.
+  assert.match(rendered, /MCP\s+tool call is structured JSON and does not perform shell expansion/);
+  assert.match(rendered, /never\s+pass `\$CLAUDE_CODE_SESSION_ID`, `\$\{CLAUDE_CODE_SESSION_ID\}`/);
+
+  // Fail-closed provider session URL boundary.
+  assert.match(rendered, /provider-session-url\.mjs/);
+  assert.match(rendered, /Never construct the URL yourself/);
+  assert.match(rendered, /stop and report that the provider\s+session URL is unavailable/);
+
+  // Full response contract validation.
+  assert.match(rendered, /`status` equal to `started`/);
+  assert.match(rendered, /non-empty `sessionId`/);
+  assert.match(rendered, /non-empty `sessionUrl`/);
+  assert.match(rendered, /non-empty `organizationId`/);
+  assert.match(rendered, /`providerSessionId` exactly equal/);
+  assert.match(rendered, /`providerSessionUrl` exactly equal/);
+  assert.match(rendered, /`capture\.status` equal to `started`/);
+  assert.match(rendered, /`capture\.eventType` equal to `user_prompt`/);
+  assert.match(rendered, /`capture\.received` equal to `1`/);
+  assert.match(rendered, /captureHookUrl/);
+  assert.match(rendered, /never print it or include\s+it in the user-facing response/);
+
+  // Repository work is forbidden until activation succeeds.
+  assert.match(rendered, /stop\s+before repository work/i);
+  assert.match(rendered, /Require the activation command to\s+succeed/);
+  assert.match(
+    rendered,
+    /node "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/background-capture-lifecycle\.mjs" activate/
+  );
+  assert.match(rendered, /mode-`0600` files under `~\/\.polygraph\/background-capture\/`/);
+
+  // The transcript sidecar is the only capture architecture.
+  assert.match(rendered, /Do not call `background_capture_event` yourself/);
+  assert.match(rendered, /do not duplicate transcript events/i);
+  assert.match(rendered, /Do not create or edit `.claude\/settings\.json`/);
+
+  // No spike or service-account remnants.
+  assert.doesNotMatch(rendered, /polygraph-oauth-spike/);
+  assert.doesNotMatch(rendered, /connector_probe/);
+  assert.doesNotMatch(rendered, /POLYGRAPH_(?:SERVICE_ACCOUNT|API_TOKEN|ACCESS_TOKEN)/);
+});
+
+test('background-session-start ships only in the Claude artifact', () => {
+  for (const platform of ['codex', 'opencode']) {
+    assert.equal(renderSkill('background-session-start', platform).trim(), '');
+
+    const outputDir = mkdtempSync(join(tmpdir(), `polygraph-${platform}-gated-`));
+    processSkills(platform, {
+      outputDir,
+      skillsDir: 'skills',
+      skillsFile: 'SKILL.md',
+    });
+    assert.equal(
+      existsSync(join(outputDir, 'skills', 'background-session-start')),
+      false
+    );
+  }
+
+  const outputDir = mkdtempSync(join(tmpdir(), 'polygraph-claude-gated-'));
+  processSkills('claude', {
+    outputDir,
+    skillsDir: 'skills',
+    skillsFile: 'SKILL.md',
+  });
+  assert.ok(
+    existsSync(
+      join(outputDir, 'skills', 'background-session-start', 'SKILL.md')
+    )
+  );
+});
+
+test('Claude plugin hooks preload the inert capture lifecycle helper', () => {
+  const hooks = JSON.parse(
+    readFileSync(join(rootDir, 'source', 'hooks', 'hooks.json'), 'utf8')
+  ).hooks;
+
+  const lifecycleCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/background-capture-lifecycle.mjs';
+
+  assert.ok(
+    hooks.SessionStart.some(
+      (group) =>
+        group.matcher === 'startup|resume|compact' &&
+        group.hooks.some(
+          (hook) => hook.type === 'command' && hook.command === lifecycleCommand
+        )
+    )
+  );
+  for (const eventName of ['UserPromptSubmit', 'PostToolUse', 'Stop']) {
+    assert.deepEqual(hooks[eventName], [
+      { hooks: [{ type: 'command', command: lifecycleCommand }] },
+    ]);
+  }
+  // Hooks maintain the sidecar; they never transmit content themselves.
+  assert.doesNotMatch(JSON.stringify(hooks), /"type":\s*"http"/);
+  assert.doesNotMatch(JSON.stringify(hooks), /background_capture_event/);
+});
+
+test('Claude plugin manifest uses the private-preview identity', () => {
+  const manifest = buildClaudePluginManifest(readRootPackageJson());
+
+  assert.equal(manifest.name, 'james-polygraph');
+});
+
+test('Claude package ships hooks but no local MCP configuration', () => {
+  const pkg = buildClaudePackageJson(readRootPackageJson());
+
+  assert.ok(pkg.files.includes('hooks/'));
+  assert.ok(pkg.files.includes('skills/'));
+  assert.ok(!pkg.files.includes('.mcp.json'));
+});
+
+test('fork marketplace installs the preview plugin from the local build', () => {
+  const marketplace = JSON.parse(
+    readFileSync(join(rootDir, '.claude-plugin', 'marketplace.json'), 'utf8')
+  );
+
+  assert.equal(marketplace.name, 'james-polygraph-plugins');
+  assert.equal(marketplace.plugins[0].name, 'james-polygraph');
+  assert.equal(marketplace.plugins[0].source, './dist/claude');
+});
+
+test('built Claude artifact contains the cloud-session pieces and no obsolete machinery', (t) => {
+  const claudeDir = join(rootDir, 'dist', 'claude');
+  if (!existsSync(claudeDir)) {
+    t.skip('dist/claude not built; run `npm run build` first');
+    return;
+  }
+
+  for (const required of [
+    join('skills', 'background-session-start', 'SKILL.md'),
+    join('hooks', 'background-capture-lifecycle.mjs'),
+    join('hooks', 'hosted-parent-log-sidecar-entry.js'),
+    join('hooks', 'provider-session-url.mjs'),
+    join('hooks', 'hooks.json'),
+    join('.claude-plugin', 'plugin.json'),
+  ]) {
+    assert.ok(
+      existsSync(join(claudeDir, required)),
+      `expected dist/claude/${required}`
+    );
+  }
+
+  for (const excluded of [
+    '.mcp.json',
+    'wip-mcp',
+    join('hooks', 'polygraph.js'),
+    join('hooks', 'polygraph-mcp.mjs'),
+  ]) {
+    assert.equal(
+      existsSync(join(claudeDir, excluded)),
+      false,
+      `did not expect dist/claude/${excluded}`
+    );
+  }
+
+  const manifest = JSON.parse(
+    readFileSync(join(claudeDir, '.claude-plugin', 'plugin.json'), 'utf8')
+  );
+  assert.equal(manifest.name, 'james-polygraph');
 });

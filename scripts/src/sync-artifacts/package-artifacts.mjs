@@ -22,9 +22,12 @@ export function buildMcpConfig(agentType) {
   };
 }
 
-function buildClaudePluginManifest(pkgJson) {
+export function buildClaudePluginManifest(pkgJson) {
+  // Private-preview identity: installs alongside the official `polygraph`
+  // plugin without colliding with it, so skills are invoked with the
+  // `/james-polygraph:` prefix.
   return {
-    name: 'polygraph',
+    name: 'james-polygraph',
     version: pkgJson.version,
     description: pkgJson.description,
     author: pkgJson.author,
@@ -114,23 +117,26 @@ function copySharedDocs(targetDir) {
   }
 }
 
+export function buildClaudePackageJson(pkgJson) {
+  return buildPublishPackageJson(pkgJson, '@polygraph/claude-plugin', [
+    'skills/',
+    'agents/',
+    'hooks/',
+    '.claude-plugin/',
+    'README.md',
+  ]);
+}
+
 export function finalizeClaudeDist(pkgJson) {
   const claudeDir = join(distDir, 'claude');
   const pluginDir = join(claudeDir, '.claude-plugin');
   mkdirSync(pluginDir, { recursive: true });
 
-  writeJson(
-    join(claudeDir, 'package.json'),
-    buildPublishPackageJson(pkgJson, '@polygraph/claude-plugin', [
-      'skills/',
-      'agents/',
-      'hooks/',
-      '.mcp.json',
-      '.claude-plugin/',
-      'README.md',
-    ])
-  );
-  writeJson(join(claudeDir, '.mcp.json'), buildMcpConfig());
+  writeJson(join(claudeDir, 'package.json'), buildClaudePackageJson(pkgJson));
+  // The cloud-agent private preview deliberately ships no `.mcp.json`: all
+  // Polygraph tools come from the separately configured hosted remote MCP
+  // connector, and the worker never launches a local Polygraph MCP server or
+  // receives a service-account credential.
   writeJson(join(pluginDir, 'plugin.json'), buildClaudePluginManifest(pkgJson));
 
   const sourceHooksDir = join(sourceDir, 'hooks');
