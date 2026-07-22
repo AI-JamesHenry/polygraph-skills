@@ -4,12 +4,21 @@ import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const {
   mapClaudeTranscriptRecords,
   readCompleteTranscriptRecords,
 } = require('../source/hooks/hosted-parent-log-sidecar-entry.js');
+
+const SIDECAR_PATH = join(
+  import.meta.dirname,
+  '..',
+  'source',
+  'hooks',
+  'hosted-parent-log-sidecar-entry.js'
+);
 
 function toRecords(lines, baseOffset = 0) {
   let offset = baseOffset;
@@ -28,6 +37,46 @@ function toRecords(lines, baseOffset = 0) {
 function parsedLines(mapped) {
   return mapped.map((entry) => JSON.parse(entry.line));
 }
+
+test('sidecar accepts hosted capture capability URLs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'polygraph-sidecar-hosted-url-'));
+  const transcriptPath = join(dir, 'transcript.jsonl');
+  const runtimePath = join(dir, 'runtime.json');
+  writeFileSync(transcriptPath, '');
+
+  try {
+    const child = spawn(process.execPath, [SIDECAR_PATH], {
+      env: {
+        ...process.env,
+        POLYGRAPH_PARENT_LOG_PARENT_SESSION_ID: 'provider-session-id',
+        POLYGRAPH_PARENT_LOG_PATH: transcriptPath,
+        POLYGRAPH_PARENT_LOG_RUNTIME_PATH: runtimePath,
+        POLYGRAPH_PARENT_LOG_CAPTURE_HOOK_URL:
+          'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456',
+        POLYGRAPH_PARENT_LOG_IDLE_CLOSE_MS: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const exitCode = await new Promise((resolve) => {
+      child.once('close', resolve);
+    });
+
+    assert.equal(exitCode, 0, stderr);
+    assert.match(stdout, /"status":"ready"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('actual newlines in prompts and responses remain actual newlines', () => {
   const prompt = 'line one\nline two\n\nline four';

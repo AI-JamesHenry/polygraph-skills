@@ -23,7 +23,9 @@ import {
 
 const PROVIDER_SESSION_ID = '88b2ff2e-b146-458c-85fc-109c7bc12f26';
 const CAPTURE_HOOK_URL =
-  'https://polygraph.example.test/hooks/capture/pch_fake-test-capability';
+  'https://polygraph.example.test/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456';
+const HOSTED_CAPTURE_HOOK_URL =
+  'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'polygraph-background-capture-'));
@@ -120,9 +122,19 @@ test('capture capability URLs are validated fail-closed', () => {
     '',
     'not-a-url',
     'http://polygraph.example.test/hooks/capture/pch_abc',
+    'https://user:pass@polygraph.example.test/hooks/capture/pch_abc',
+    'https://user:pass@polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abc',
     'https://polygraph.example.test/other/pch_abc',
+    'https://polygraph.example.test/hooks/capture/pch_abc',
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abc',
+    'https://polygraph.example.test/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456/trailing',
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456/trailing',
     'https://polygraph.example.test/hooks/capture/pch_abc?x=1',
     'https://polygraph.example.test/hooks/capture/pch_abc#frag',
+    'https://polygraph.example.test/hooks/capture/pch_abc?',
+    'https://polygraph.example.test/hooks/capture/pch_abc#',
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abc?',
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abc#',
     `https://polygraph.example.test/hooks/capture/pch_${'a'.repeat(2_000)}`,
   ]) {
     assert.throws(
@@ -131,6 +143,10 @@ test('capture capability URLs are validated fail-closed', () => {
     );
   }
   assert.equal(safeCaptureHookUrl(CAPTURE_HOOK_URL), CAPTURE_HOOK_URL);
+  assert.equal(
+    safeCaptureHookUrl(HOSTED_CAPTURE_HOOK_URL),
+    HOSTED_CAPTURE_HOOK_URL
+  );
 });
 
 test('activation writes an atomic mode-0600 marker with only the expected fields', async () => {

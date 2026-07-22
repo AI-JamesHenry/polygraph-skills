@@ -33,7 +33,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const CAPTURE_HOOK_PATH = '/hooks/capture/pch_';
+const CAPTURE_HOOK_PATH_PATTERN =
+  /^\/(?:nx-cloud\/polygraph\/)?hooks\/capture\/pch_[A-Za-z0-9_-]{32,}$/;
 // Single supported marker schema. Markers written by earlier unpublished
 // spike builds (versions 1-4) are deliberately not migrated: they are
 // deactivated on sight so capture only runs after a fresh explicit opt-in.
@@ -74,9 +75,11 @@ export function safeCaptureHookUrl(captureHookUrl) {
   }
   if (
     parsed.protocol !== 'https:' ||
-    !parsed.pathname.startsWith(CAPTURE_HOOK_PATH) ||
-    parsed.search ||
-    parsed.hash ||
+    parsed.username ||
+    parsed.password ||
+    !CAPTURE_HOOK_PATH_PATTERN.test(parsed.pathname) ||
+    captureHookUrl.includes('?') ||
+    captureHookUrl.includes('#') ||
     captureHookUrl.length > 2_000
   ) {
     throw new Error('Invalid Polygraph capture hook URL.');

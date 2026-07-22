@@ -665,7 +665,7 @@ function requiredEnv(name) {
 }
 function validateCaptureHookUrl(value) {
   const parsed = new URL(value);
-  if (parsed.protocol !== "https:" || !/^\/hooks\/capture\/pch_[A-Za-z0-9_-]{32,}$/.test(parsed.pathname) || parsed.search || parsed.hash) {
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || !/^\/(?:nx-cloud\/polygraph\/)?hooks\/capture\/pch_[A-Za-z0-9_-]{32,}$/.test(parsed.pathname) || value.includes("?") || value.includes("#")) {
     throw new Error("POLYGRAPH_PARENT_LOG_CAPTURE_HOOK_URL is invalid");
   }
   return parsed.toString().replace(/\/$/, "");
