@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const {
   mapClaudeTranscriptRecords,
+  postBatch,
   readCompleteTranscriptRecords,
 } = require('../source/hooks/hosted-parent-log-sidecar-entry.js');
 
@@ -76,6 +77,33 @@ test('sidecar accepts hosted capture capability URLs', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('hosted transcript uploads use the nx-api request contract', async () => {
+  let capturedUrl;
+  let capturedRequest;
+  const line = JSON.stringify({ type: 'user', message: 'hello' });
+
+  await postBatch(
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456',
+    'provider-session-id',
+    [{ line }],
+    async (url, request) => {
+      capturedUrl = url;
+      capturedRequest = request;
+      return { ok: true };
+    }
+  );
+
+  assert.equal(
+    capturedUrl,
+    'https://polygraph.example.test/nx-cloud/polygraph/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456/transcript'
+  );
+  assert.deepEqual(JSON.parse(capturedRequest.body), {
+    providerSessionId: 'provider-session-id',
+    source: 'claude-transcript-v1',
+    lines: [line],
+  });
 });
 
 test('actual newlines in prompts and responses remain actual newlines', () => {

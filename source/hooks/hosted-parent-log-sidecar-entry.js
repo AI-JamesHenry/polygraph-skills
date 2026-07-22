@@ -22,6 +22,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var hosted_parent_log_sidecar_entry_exports = {};
 __export(hosted_parent_log_sidecar_entry_exports, {
   mapClaudeTranscriptRecords: () => mapClaudeTranscriptRecords,
+  postBatch: () => postBatch,
   readCompleteTranscriptRecords: () => readCompleteTranscriptRecords
 });
 module.exports = __toCommonJS(hosted_parent_log_sidecar_entry_exports);
@@ -698,12 +699,12 @@ function batchMappedLines(lines) {
     batches.push(batch);
   return batches;
 }
-async function postBatch(captureHookUrl, providerSessionId, lines) {
-  const response = await fetch(`${captureHookUrl}/transcript`, {
+async function postBatch(captureHookUrl, providerSessionId, lines, fetchImpl = fetch) {
+  const response = await fetchImpl(`${captureHookUrl}/transcript`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      session_id: providerSessionId,
+      providerSessionId,
       source: "claude-transcript-v1",
       lines: lines.map((entry) => entry.line)
     }),
@@ -811,5 +812,6 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   mapClaudeTranscriptRecords,
+  postBatch,
   readCompleteTranscriptRecords
 });
