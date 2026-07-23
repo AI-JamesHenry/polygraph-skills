@@ -95,6 +95,126 @@ test('sessions without an activation marker are a local no-op', async () => {
   }
 });
 
+test('Slack literal command expands the packaged skill before repository work', async () => {
+  const f = fixture();
+  try {
+    const skillPath = join(f.root, 'background-session-start.md');
+    writeFileSync(
+      skillPath,
+      [
+        '---',
+        'name: background-session-start',
+        '---',
+        '# Start a Polygraph Cloud Session',
+        '',
+        'Task: $ARGUMENTS',
+        '',
+        'Call `mcp__Polygraph__background_session_start` before repository work.',
+        '',
+      ].join('\n')
+    );
+    const result = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          '/james-polygraph:background-session-start List all root-level files',
+      },
+      {
+        root: f.root,
+        environment: { CLAUDE_CODE_ENTRYPOINT: 'claude_in_slack' },
+        skillPath,
+      }
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, '');
+    const output = JSON.parse(result.stdout);
+    assert.equal(
+      output.hookSpecificOutput.hookEventName,
+      'UserPromptSubmit'
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /routed from Slack/
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /# Start a Polygraph Cloud Session/
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /Task: List all root-level files/
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /mcp__Polygraph__background_session_start/
+    );
+    assert.doesNotMatch(
+      output.hookSpecificOutput.additionalContext,
+      /\$ARGUMENTS/
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('literal background command is inert outside the Slack entrypoint', async () => {
+  const f = fixture();
+  try {
+    const result = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          '/james-polygraph:background-session-start List all root-level files',
+      },
+      {
+        root: f.root,
+        environment: { CLAUDE_CODE_ENTRYPOINT: 'claude_in_cloud' },
+      }
+    );
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('Slack prose mentions and commands without tasks do not start work', async () => {
+  const f = fixture();
+  try {
+    const prose = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          'Why did /james-polygraph:background-session-start fail yesterday?',
+      },
+      {
+        root: f.root,
+        environment: { CLAUDE_CODE_ENTRYPOINT: 'claude_in_slack' },
+      }
+    );
+    assert.deepEqual(prose, { exitCode: 0, stdout: '', stderr: '' });
+
+    const missingTask = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt: '/james-polygraph:background-session-start',
+      },
+      {
+        root: f.root,
+        environment: { CLAUDE_CODE_ENTRYPOINT: 'claude_in_slack' },
+      }
+    );
+    assert.equal(missingTask.exitCode, 2);
+    assert.match(missingTask.stderr, /requires a non-empty user task/);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('invocation debug records provenance without secrets or prompt content', () => {
   const record = backgroundInvocationDebugRecord(
     {

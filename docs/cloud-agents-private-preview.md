@@ -42,6 +42,15 @@ task:
 /james-polygraph:background-session-start <real user task>
 ```
 
+Claude Code sessions routed from Slack expose
+`CLAUDE_CODE_ENTRYPOINT=claude_in_slack` but deliver the namespaced command as
+literal prompt text instead of applying the Cloud UI's slash-command
+expansion. On exactly that entrypoint, the dormant `UserPromptSubmit` hook
+recognizes an invocation-shaped command line with a non-empty task, loads the
+packaged Claude skill, substitutes the task, and injects the trusted
+instructions into the current session. Other entrypoints, prose mentions,
+missing tasks, and sessions with active capture do not take this path.
+
 The skill calls the hosted `background_session_start` tool once, validates the
 returned contract, and activates a detached transcript sidecar from the byte
 offset of the opt-in prompt. Conversation content from before the explicit
@@ -62,24 +71,22 @@ record for every `SessionStart` and `UserPromptSubmit` event to:
 ~/.polygraph/logs/background-invocation-debug.jsonl
 ```
 
-The file is mode `0600`, rotates at 5 MB, and each SessionStart also returns a
-one-time hook notice containing the exact resolved path. Records list every
-environment and hook-input field name, plus values for fields whose names
-suggest invocation provenance (`CLAUDE`, `SLACK`, `ENTRYPOINT`, `SOURCE`, and
-similar). Credential-like values, prompt/message/context content, and raw IDs
-are redacted. Compare a session started directly in the Cloud UI with one
-routed from Slack to find a stable discriminator before removing this
-temporary diagnostic.
+The file is mode `0600` and rotates at 5 MB. Records list every environment
+and hook-input field name, plus values for fields whose names suggest
+invocation provenance (`CLAUDE`, `SLACK`, `ENTRYPOINT`, `SOURCE`, and similar).
+Credential-like values, prompt/message/context content, and raw IDs are
+redacted. Remove this temporary diagnostic after the Slack bridge is verified.
 
 ## Provider session URL input (integration boundary)
 
-The hosted contract requires the exact URL of the current Claude session. This
-repository has no supported automatic source for that value: it must come from
-an explicit provider-supplied input (the Claude session link the environment
-provides, or a URL the user pastes when invoking the skill). The plugin
-validates the value fail-closed (`hooks/provider-session-url.mjs`) and never
-fabricates a URL from `CLAUDE_CODE_SESSION_ID`. If no valid provider session
-URL is available, the skill stops before any repository work.
+The hosted contract requires the exact URL of the current Claude session.
+Claude cloud sessions expose `CLAUDE_CODE_REMOTE_SESSION_ID` with a `cse_`
+prefix, and Claude documents that the transcript URL uses the same opaque
+identifier with a `session_` prefix. The plugin performs only that documented
+conversion, validates the result fail-closed
+(`hooks/provider-session-url.mjs`), and never fabricates a URL from
+`CLAUDE_CODE_SESSION_ID`. If the remote session ID is unavailable or invalid,
+the skill stops before any repository work.
 
 ## Local state and security
 

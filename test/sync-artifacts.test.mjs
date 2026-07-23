@@ -532,7 +532,10 @@ test('background-session-start renders the four-argument cloud-session contract 
 
   // Fail-closed provider session URL boundary.
   assert.match(rendered, /provider-session-url\.mjs/);
-  assert.match(rendered, /Never construct the URL yourself/);
+  assert.match(rendered, /CLAUDE_CODE_REMOTE_SESSION_ID/);
+  assert.match(rendered, /--remote-session-id/);
+  assert.match(rendered, /same opaque identifier with a `session_` prefix/);
+  assert.match(rendered, /Never substitute\s+`CLAUDE_CODE_SESSION_ID`/);
   assert.match(rendered, /stop and report that the provider\s+session URL is unavailable/);
 
   // Full response contract validation.

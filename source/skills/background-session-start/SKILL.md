@@ -44,21 +44,21 @@ before repository work.
    tool call is structured JSON and does not perform shell expansion, so never
    pass `$CLAUDE_CODE_SESSION_ID`, `${CLAUDE_CODE_SESSION_ID}`, or the
    variable name itself as the argument value.
-4. Obtain the concrete URL of the current Claude session from an explicit
-   provider-supplied input: the Claude session link provided by the Claude
-   Code environment for this session, or a session URL the user supplied
-   explicitly. Never construct the URL yourself — the visible Claude session
-   URL uses its own opaque identifier, and combining `CLAUDE_CODE_SESSION_ID`
-   with a URL prefix produces a wrong, fabricated link. Validate the value by
-   running:
+4. Obtain the concrete URL of the current Claude cloud session from the
+   provider-managed `CLAUDE_CODE_REMOTE_SESSION_ID`. Claude documents that
+   this value uses a `cse_` prefix while the visible transcript URL uses the
+   same opaque identifier with a `session_` prefix. Resolve and validate that
+   provider-defined conversion by running:
 
    ```text
-   node "${CLAUDE_PLUGIN_ROOT}/hooks/provider-session-url.mjs" "<candidate session URL>"
+   node "${CLAUDE_PLUGIN_ROOT}/hooks/provider-session-url.mjs" --remote-session-id "${CLAUDE_CODE_REMOTE_SESSION_ID}"
    ```
 
-   Use the exact URL the command prints. If no provider-supplied session URL
-   is available or validation fails, stop and report that the provider
-   session URL is unavailable.
+   Use the exact URL the command prints. Never substitute
+   `CLAUDE_CODE_SESSION_ID`, fabricate another URL, or pass an unexpanded
+   variable name. If `CLAUDE_CODE_REMOTE_SESSION_ID` is unavailable or
+   validation fails, stop and report that the provider session URL is
+   unavailable.
 5. Call `background_session_start` from the `Polygraph` connector exactly
    once with:
    - `task`: `$ARGUMENTS` verbatim;

@@ -47,6 +47,16 @@ const HOSTED_SIDECAR_ENTRY = resolve(
   MODULE_DIR,
   'hosted-parent-log-sidecar-entry.js'
 );
+const BACKGROUND_SESSION_START_COMMAND =
+  '/james-polygraph:background-session-start';
+const BACKGROUND_SESSION_START_SKILL = resolve(
+  MODULE_DIR,
+  '..',
+  'skills',
+  'background-session-start',
+  'SKILL.md'
+);
+const SLACK_ENTRYPOINT = 'claude_in_slack';
 const INVOCATION_DEBUG_EVENTS = new Set([
   'SessionStart',
   'UserPromptSubmit',
@@ -404,6 +414,68 @@ function emptyResult() {
   return { exitCode: 0, stdout: '', stderr: '' };
 }
 
+function contextResult(hookEventName, additionalContext) {
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName,
+        additionalContext,
+      },
+    }),
+    stderr: '',
+  };
+}
+
+function literalBackgroundSessionInvocation(prompt) {
+  if (typeof prompt !== 'string') return null;
+  const match =
+    /^[ \t]*(?:(?:@[Cc]laude(?:[ \t]+[Cc]ode)?|<@[^>\r\n]+>)[ \t]+)?\/james-polygraph:background-session-start(?=$|[ \t])/m.exec(
+      prompt
+    );
+  if (!match) return null;
+
+  const commandOffset =
+    match.index + match[0].indexOf(BACKGROUND_SESSION_START_COMMAND);
+  return {
+    task: prompt
+      .slice(commandOffset + BACKGROUND_SESSION_START_COMMAND.length)
+      .trim(),
+  };
+}
+
+function expandedBackgroundSessionSkill(
+  task,
+  skillPath = BACKGROUND_SESSION_START_SKILL
+) {
+  const content = readFileSync(skillPath, 'utf8');
+  const frontmatter =
+    /(?:^|\r?\n)---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
+  if (!frontmatter) {
+    throw new Error('The packaged background-session-start skill is invalid.');
+  }
+  let body = content.slice(frontmatter.index + frontmatter[0].length);
+  body = body.replace(/\r?\n?\{%-?\s*endif\s*-?%\}\s*$/, '');
+  if (!body.trim() || !body.includes('$ARGUMENTS')) {
+    throw new Error('The packaged background-session-start skill is invalid.');
+  }
+  return body.replaceAll('$ARGUMENTS', () => task);
+}
+
+function slackBackgroundSessionContext(task, skillPath) {
+  return [
+    'The current Claude Code task was routed from Slack, and the user explicitly invoked the Polygraph background-session-start command.',
+    'Slack delivered the command as literal prompt text instead of performing the Claude UI slash-command expansion.',
+    'The trusted Polygraph plugin hook has expanded the packaged skill below.',
+    'Follow these instructions directly in the current Claude Code session before any repository work.',
+    'Do not invoke a Skill tool, launch a worker merely to expand this command, or substitute another Polygraph workflow.',
+    '',
+    '<polygraph-background-session-start-skill>',
+    expandedBackgroundSessionSkill(task, skillPath),
+    '</polygraph-background-session-start-skill>',
+  ].join('\n');
+}
+
 function invocationDebugValue(name, value) {
   if (SENSITIVE_NAME_PATTERN.test(name) || CONTENT_NAME_PATTERN.test(name)) {
     return '<redacted>';
@@ -507,6 +579,8 @@ export async function handleBackgroundCaptureHook(
     root = defaultRoot(),
     ensureSidecar = ensureHostedTranscriptSidecar,
     home = homedir(),
+    environment = process.env,
+    skillPath = BACKGROUND_SESSION_START_SKILL,
   } = {}
 ) {
   const providerSessionId = input?.session_id;
@@ -521,7 +595,37 @@ export async function handleBackgroundCaptureHook(
     }
     return emptyResult();
   }
-  if (!state) return emptyResult();
+  if (!state) {
+    if (
+      input?.hook_event_name !== 'UserPromptSubmit' ||
+      environment.CLAUDE_CODE_ENTRYPOINT !== SLACK_ENTRYPOINT
+    ) {
+      return emptyResult();
+    }
+    const invocation = literalBackgroundSessionInvocation(input.prompt);
+    if (!invocation) return emptyResult();
+    if (!invocation.task) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr:
+          `${BACKGROUND_SESSION_START_COMMAND} requires a non-empty user task.\n`,
+      };
+    }
+    try {
+      return contextResult(
+        'UserPromptSubmit',
+        slackBackgroundSessionContext(invocation.task, skillPath)
+      );
+    } catch (error) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr:
+          `Polygraph Slack command expansion failed: ${error instanceof Error ? error.message : 'unknown error'}.\n`,
+      };
+    }
+  }
   try {
     await ensureSidecar(refreshTranscriptState(state, root, home), { root });
     return emptyResult();

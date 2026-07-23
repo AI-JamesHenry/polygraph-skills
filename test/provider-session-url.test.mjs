@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   PROVIDER_SESSION_URL_ORIGINS,
   resolveProviderSessionUrl,
+  resolveProviderSessionUrlFromRemoteSessionId,
 } from '../source/hooks/provider-session-url.mjs';
 
 const VALID_URL = 'https://claude.ai/code/session_0123456789abcdef';
@@ -15,6 +16,34 @@ test('a provider-supplied Claude session URL passes through unchanged', () => {
     resolveProviderSessionUrl('https://claude.com/code/session_abcdefgh'),
     'https://claude.com/code/session_abcdefgh'
   );
+});
+
+test('a Claude remote session ID resolves through the documented prefix conversion', () => {
+  assert.equal(
+    resolveProviderSessionUrlFromRemoteSessionId('cse_0123456789abcdef'),
+    'https://claude.ai/code/session_0123456789abcdef'
+  );
+  assert.equal(
+    resolveProviderSessionUrlFromRemoteSessionId('  cse_abcdefgh  '),
+    'https://claude.ai/code/session_abcdefgh'
+  );
+});
+
+test('invalid Claude remote session IDs fail closed', () => {
+  for (const value of [
+    undefined,
+    null,
+    '',
+    'session_0123456789abcdef',
+    'cse_short',
+    '$CLAUDE_CODE_REMOTE_SESSION_ID',
+    'cse_abc/defgh',
+  ]) {
+    assert.throws(
+      () => resolveProviderSessionUrlFromRemoteSessionId(value),
+      /Invalid Claude provider session URL/
+    );
+  }
 });
 
 test('only supported Claude origins are accepted', () => {
