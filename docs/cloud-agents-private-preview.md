@@ -55,10 +55,15 @@ session URL are distinct links to different systems.
 
 ### Temporary invocation-origin diagnostics
 
-During the private preview, the capture lifecycle hook writes a structured
-diagnostic line to stderr for `SessionStart` and `UserPromptSubmit`. Search
-Claude hook logs for the `[james-polygraph]` prefix and the
-`james-polygraph-background-invocation-debug` tag. The record lists every
+During the private preview, the capture lifecycle hook appends one structured
+record for every `SessionStart` and `UserPromptSubmit` event to:
+
+```text
+~/.polygraph/logs/background-invocation-debug.jsonl
+```
+
+The file is mode `0600`, rotates at 5 MB, and each SessionStart also returns a
+one-time hook notice containing the exact resolved path. Records list every
 environment and hook-input field name, plus values for fields whose names
 suggest invocation provenance (`CLAUDE`, `SLACK`, `ENTRYPOINT`, `SOURCE`, and
 similar). Credential-like values, prompt/message/context content, and raw IDs

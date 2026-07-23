@@ -18,6 +18,7 @@ import {
   deactivateBackgroundCapture,
   ensureHostedTranscriptSidecar,
   handleBackgroundCaptureHook,
+  persistBackgroundInvocationDebug,
   safeCaptureHookUrl,
   safeProviderSessionId,
 } from '../source/hooks/background-capture-lifecycle.mjs';
@@ -141,6 +142,48 @@ test('invocation debug records provenance without secrets or prompt content', ()
   assert.doesNotMatch(JSON.stringify(record), /private user prompt/);
   assert.doesNotMatch(JSON.stringify(record), /private thread content/);
   assert.doesNotMatch(JSON.stringify(record), /super-secret/);
+});
+
+test('invocation debug persists to a private JSONL log', () => {
+  const home = mkdtempSync(join(tmpdir(), 'polygraph-invocation-debug-'));
+  try {
+    const logFile = persistBackgroundInvocationDebug(
+      {
+        hook_event_name: 'SessionStart',
+        session_id: PROVIDER_SESSION_ID,
+        source: 'startup',
+      },
+      {
+        environment: {
+          CLAUDE_CODE_ENTRYPOINT: 'slack',
+          CLAUDE_CODE_OAUTH_TOKEN: 'super-secret-token',
+        },
+        home,
+        now: Date.parse('2026-07-23T12:00:00.000Z'),
+      }
+    );
+
+    assert.equal(
+      logFile,
+      join(
+        home,
+        '.polygraph',
+        'logs',
+        'background-invocation-debug.jsonl'
+      )
+    );
+    assert.equal(statSync(logFile).mode & 0o777, 0o600);
+    const entry = JSON.parse(readFileSync(logFile, 'utf8').trim());
+    assert.equal(entry.time, '2026-07-23T12:00:00.000Z');
+    assert.equal(entry.provenanceEnvironment.CLAUDE_CODE_ENTRYPOINT, 'slack');
+    assert.equal(
+      entry.provenanceEnvironment.CLAUDE_CODE_OAUTH_TOKEN,
+      '<redacted>'
+    );
+    assert.doesNotMatch(JSON.stringify(entry), /super-secret/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('invalid provider session IDs are rejected', () => {

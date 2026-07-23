@@ -19,6 +19,7 @@
 
 import { spawn } from 'node:child_process';
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -56,6 +57,7 @@ const SENSITIVE_NAME_PATTERN =
   /AUTH|COOKIE|CREDENTIAL|KEY|PASSWORD|PRIVATE|SECRET|TOKEN/i;
 const CONTENT_NAME_PATTERN =
   /CONTENT|CONTEXT|MESSAGE|PROMPT|RESPONSE|TRANSCRIPT/i;
+const INVOCATION_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 function defaultRoot() {
   return join(homedir(), '.polygraph');
@@ -459,10 +461,44 @@ export function backgroundInvocationDebugRecord(
   };
 }
 
-function logBackgroundInvocationDebug(input) {
-  const record = backgroundInvocationDebugRecord(input);
-  if (!record) return;
-  process.stderr.write(`[james-polygraph] ${JSON.stringify(record)}\n`);
+export function persistBackgroundInvocationDebug(
+  input,
+  {
+    environment = process.env,
+    home = process.env.HOME?.trim() || homedir(),
+    now = Date.now(),
+  } = {}
+) {
+  const record = backgroundInvocationDebugRecord(input, environment);
+  if (!record) return null;
+
+  try {
+    const logsDir = join(home, '.polygraph', 'logs');
+    mkdirSync(logsDir, { recursive: true, mode: 0o700 });
+    const logFile = join(logsDir, 'background-invocation-debug.jsonl');
+
+    try {
+      if (statSync(logFile).size > INVOCATION_DEBUG_LOG_MAX_BYTES) {
+        renameSync(logFile, `${logFile}.1`);
+      }
+    } catch {
+      // No prior log, or rotation failed. Continue with the current file.
+    }
+
+    appendFileSync(
+      logFile,
+      `${JSON.stringify({
+        time: new Date(now).toISOString(),
+        ...record,
+      })}\n`,
+      { encoding: 'utf8', mode: 0o600 }
+    );
+    chmodSync(logFile, 0o600);
+    return logFile;
+  } catch {
+    // Temporary diagnostics must never break a Claude lifecycle hook.
+    return null;
+  }
 }
 
 export async function handleBackgroundCaptureHook(
@@ -529,7 +565,15 @@ async function runCli() {
   }
 
   const input = readStdin();
-  logBackgroundInvocationDebug(input);
+  const invocationDebugLog = persistBackgroundInvocationDebug(input);
+  if (
+    invocationDebugLog &&
+    input?.hook_event_name === 'SessionStart'
+  ) {
+    process.stdout.write(
+      `Temporary Polygraph invocation diagnostics: ${invocationDebugLog}\n`
+    );
+  }
   const result = await handleBackgroundCaptureHook(input);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
