@@ -46,6 +46,16 @@ const HOSTED_SIDECAR_ENTRY = resolve(
   MODULE_DIR,
   'hosted-parent-log-sidecar-entry.js'
 );
+const INVOCATION_DEBUG_EVENTS = new Set([
+  'SessionStart',
+  'UserPromptSubmit',
+]);
+const PROVENANCE_NAME_PATTERN =
+  /CLAUDE|SLACK|REMOTE|CLOUD|ENTRYPOINT|ENVIRONMENT|ORIGIN|SOURCE|SESSION|TASK|TRIGGER/i;
+const SENSITIVE_NAME_PATTERN =
+  /AUTH|COOKIE|CREDENTIAL|KEY|PASSWORD|PRIVATE|SECRET|TOKEN/i;
+const CONTENT_NAME_PATTERN =
+  /CONTENT|CONTEXT|MESSAGE|PROMPT|RESPONSE|TRANSCRIPT/i;
 
 function defaultRoot() {
   return join(homedir(), '.polygraph');
@@ -392,6 +402,69 @@ function emptyResult() {
   return { exitCode: 0, stdout: '', stderr: '' };
 }
 
+function invocationDebugValue(name, value) {
+  if (SENSITIVE_NAME_PATTERN.test(name) || CONTENT_NAME_PATTERN.test(name)) {
+    return '<redacted>';
+  }
+  if (/(?:^|[_-])ID(?:$|[_-])|ID$/i.test(name)) {
+    return `<set:length=${String(value).length}>`;
+  }
+  if (typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value !== 'string') return `<${typeof value}>`;
+  return value.length <= 240 ? value : `${value.slice(0, 240)}…`;
+}
+
+export function backgroundInvocationDebugRecord(
+  input,
+  environment = process.env
+) {
+  if (!INVOCATION_DEBUG_EVENTS.has(input?.hook_event_name)) return null;
+
+  const environmentNames = Object.keys(environment).sort();
+  const provenanceEnvironment = Object.fromEntries(
+    environmentNames
+      .filter((name) => PROVENANCE_NAME_PATTERN.test(name))
+      .map((name) => [
+        name,
+        invocationDebugValue(name, environment[name]),
+      ])
+  );
+  const hookInputKeys =
+    input && typeof input === 'object' ? Object.keys(input).sort() : [];
+  const provenanceHookInput = Object.fromEntries(
+    hookInputKeys
+      .filter(
+        (name) =>
+          PROVENANCE_NAME_PATTERN.test(name) &&
+          !CONTENT_NAME_PATTERN.test(name)
+      )
+      .filter((name) => {
+        const value = input[name];
+        return (
+          typeof value === 'string' ||
+          typeof value === 'number' ||
+          typeof value === 'boolean'
+        );
+      })
+      .map((name) => [name, invocationDebugValue(name, input[name])])
+  );
+
+  return {
+    tag: 'james-polygraph-background-invocation-debug',
+    hookEventName: input.hook_event_name,
+    environmentNames,
+    provenanceEnvironment,
+    hookInputKeys,
+    provenanceHookInput,
+  };
+}
+
+function logBackgroundInvocationDebug(input) {
+  const record = backgroundInvocationDebugRecord(input);
+  if (!record) return;
+  process.stderr.write(`[james-polygraph] ${JSON.stringify(record)}\n`);
+}
+
 export async function handleBackgroundCaptureHook(
   input,
   {
@@ -455,7 +528,9 @@ async function runCli() {
     return;
   }
 
-  const result = await handleBackgroundCaptureHook(readStdin());
+  const input = readStdin();
+  logBackgroundInvocationDebug(input);
+  const result = await handleBackgroundCaptureHook(input);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

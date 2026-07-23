@@ -53,6 +53,19 @@ pause/resume).
 The Polygraph session URL printed by the skill and the provider (Claude)
 session URL are distinct links to different systems.
 
+### Temporary invocation-origin diagnostics
+
+During the private preview, the capture lifecycle hook writes a structured
+diagnostic line to stderr for `SessionStart` and `UserPromptSubmit`. Search
+Claude hook logs for the `[james-polygraph]` prefix and the
+`james-polygraph-background-invocation-debug` tag. The record lists every
+environment and hook-input field name, plus values for fields whose names
+suggest invocation provenance (`CLAUDE`, `SLACK`, `ENTRYPOINT`, `SOURCE`, and
+similar). Credential-like values, prompt/message/context content, and raw IDs
+are redacted. Compare a session started directly in the Cloud UI with one
+routed from Slack to find a stable discriminator before removing this
+temporary diagnostic.
+
 ## Provider session URL input (integration boundary)
 
 The hosted contract requires the exact URL of the current Claude session. This

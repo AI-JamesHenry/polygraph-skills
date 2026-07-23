@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import {
   activateBackgroundCapture,
+  backgroundInvocationDebugRecord,
   deactivateBackgroundCapture,
   ensureHostedTranscriptSidecar,
   handleBackgroundCaptureHook,
@@ -91,6 +92,55 @@ test('sessions without an activation marker are a local no-op', async () => {
   } finally {
     f.cleanup();
   }
+});
+
+test('invocation debug records provenance without secrets or prompt content', () => {
+  const record = backgroundInvocationDebugRecord(
+    {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: PROVIDER_SESSION_ID,
+      source: 'slack',
+      prompt: 'private user prompt',
+      slack_context: 'private thread content',
+      slack_channel_id: 'C123456',
+    },
+    {
+      CLAUDE_CODE_ENTRYPOINT: 'slack',
+      CLAUDE_CODE_REMOTE: 'true',
+      CLAUDE_CODE_REMOTE_SESSION_ID: PROVIDER_SESSION_ID,
+      CLAUDE_CODE_OAUTH_TOKEN: 'super-secret-token',
+      SLACK_BOT_TOKEN: 'super-secret-slack-token',
+      PATH: '/usr/bin',
+    }
+  );
+
+  assert.equal(record.tag, 'james-polygraph-background-invocation-debug');
+  assert.equal(record.provenanceEnvironment.CLAUDE_CODE_ENTRYPOINT, 'slack');
+  assert.equal(record.provenanceEnvironment.CLAUDE_CODE_REMOTE, 'true');
+  assert.equal(
+    record.provenanceEnvironment.CLAUDE_CODE_REMOTE_SESSION_ID,
+    `<set:length=${PROVIDER_SESSION_ID.length}>`
+  );
+  assert.equal(
+    record.provenanceEnvironment.CLAUDE_CODE_OAUTH_TOKEN,
+    '<redacted>'
+  );
+  assert.equal(record.provenanceEnvironment.SLACK_BOT_TOKEN, '<redacted>');
+  assert.equal(record.provenanceEnvironment.PATH, undefined);
+  assert.equal(record.provenanceHookInput.source, 'slack');
+  assert.equal(
+    record.provenanceHookInput.session_id,
+    `<set:length=${PROVIDER_SESSION_ID.length}>`
+  );
+  assert.equal(
+    record.provenanceHookInput.slack_channel_id,
+    '<set:length=7>'
+  );
+  assert.equal(record.provenanceHookInput.prompt, undefined);
+  assert.equal(record.provenanceHookInput.slack_context, undefined);
+  assert.doesNotMatch(JSON.stringify(record), /private user prompt/);
+  assert.doesNotMatch(JSON.stringify(record), /private thread content/);
+  assert.doesNotMatch(JSON.stringify(record), /super-secret/);
 });
 
 test('invalid provider session IDs are rejected', () => {
