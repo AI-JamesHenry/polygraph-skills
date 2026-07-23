@@ -55,14 +55,17 @@ Start capture with the explicit skill and the real task in the same prompt:
 /james-polygraph:background-session-start <real user task>
 ```
 
-When a coding task is routed from Slack, Claude can receive that command as
-literal prompt text rather than as an already-expanded slash command. The
-plugin's dormant `UserPromptSubmit` hook detects only the exact namespaced
-command token and reminds Claude to invoke the same skill through its Skill
-tool before repository work. The hook does not start a session, call the
-connector, or transmit prompt content itself. If either the skill or the
-`polygraph-oauth-spike` connector is unavailable in the routed Claude Code
-session, the workflow still fails closed.
+When a coding task is routed from Slack, Claude receives that command as
+literal prompt text rather than as an already-expanded slash command, and the
+hosted worker does not expose a Skill tool that can perform the expansion
+later. The plugin's dormant `UserPromptSubmit` hook therefore detects only an
+invocation-shaped line containing the exact namespaced command, reads the
+packaged skill body, substitutes the real task, and injects those trusted
+instructions into the parent session before repository work. The hook does not
+start a session, call the connector, or transmit prompt content itself. If the
+packaged skill cannot be expanded, prompt processing is blocked. If the
+`polygraph-oauth-spike` connector is unavailable, the expanded workflow still
+fails closed before repository work.
 
 For this spike, the Claude package also emits the same workflow at
 `commands/background-session-start.md`. This deliberately supplies both the

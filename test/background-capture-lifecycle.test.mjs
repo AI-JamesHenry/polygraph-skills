@@ -71,7 +71,7 @@ test('ordinary sessions are a local no-op and transmit no prompt content', async
   }
 });
 
-test('literal Slack command reminds Claude to invoke the background session skill', async () => {
+test('literal Slack command expands the packaged background session skill inline', async () => {
   const f = fixture();
   try {
     const result = await handleBackgroundCaptureHook(
@@ -92,16 +92,29 @@ test('literal Slack command reminds Claude to invoke the background session skil
     );
     assert.match(
       output.hookSpecificOutput.additionalContext,
-      /Slack-routed Claude Code task/,
+      /Slack-routed Claude Code task delivered it as literal text/,
     );
     assert.match(
       output.hookSpecificOutput.additionalContext,
-      /Skill tool for `james-polygraph:background-session-start`/,
+      /<polygraph-background-session-start-skill>/,
     );
     assert.match(
       output.hookSpecificOutput.additionalContext,
-      /fail closed.*before repository work/i,
+      /# Start a Background Polygraph Session/,
     );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /List all root-level files/,
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /background_session_start/,
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /Do not invoke a Skill tool, launch a worker/,
+    );
+    assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /\$ARGUMENTS/);
     assert.equal(existsSync(f.settingsPath), false);
   } finally {
     f.cleanup();
