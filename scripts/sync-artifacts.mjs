@@ -6,7 +6,11 @@ import {
   recreateDir,
   rootDir,
 } from './src/sync-artifacts/common.mjs';
-import { processAgents, processSkills } from './src/sync-artifacts/processors.mjs';
+import {
+  processAgents,
+  processClaudeLegacyCommands,
+  processSkills,
+} from './src/sync-artifacts/processors.mjs';
 import {
   finalizeClaudeDist,
   finalizeCodexDist,
@@ -29,6 +33,9 @@ function runSync() {
     mkdirSync(config.outputDir, { recursive: true });
     processAgents(platformKey, config);
     processSkills(platformKey, config);
+    if (platformKey === 'claude') {
+      processClaudeLegacyCommands(config);
+    }
     console.log('');
   }
 

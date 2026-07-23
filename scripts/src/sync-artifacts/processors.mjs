@@ -76,6 +76,34 @@ export function processSkills(platformKey, config) {
   console.log(`  Processed ${count} skill(s)`);
 }
 
+export function processClaudeLegacyCommands(
+  config,
+  skillNames = ['background-session-start']
+) {
+  const commandsDir = join(config.outputDir, 'commands');
+  mkdirSync(commandsDir, { recursive: true });
+
+  for (const skillName of skillNames) {
+    const renderedSkillPath = join(
+      config.outputDir,
+      config.skillsDir,
+      skillName,
+      config.skillsFile
+    );
+    if (!existsSync(renderedSkillPath)) {
+      throw new Error(
+        `Expected rendered Claude skill before packaging command: ${skillName}`
+      );
+    }
+    writeArtifact(
+      join(commandsDir, `${skillName}.md`),
+      readFileSync(renderedSkillPath, 'utf8')
+    );
+  }
+
+  console.log(`  Processed ${skillNames.length} legacy command(s)`);
+}
+
 function writeArtifact(destPath, content) {
   mkdirSync(dirname(destPath), { recursive: true });
   writeFileSync(destPath, content);

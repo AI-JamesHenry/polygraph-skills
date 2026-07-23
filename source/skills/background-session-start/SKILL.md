@@ -1,7 +1,10 @@
 ---
 name: background-session-start
-description: Explicitly start OAuth-authenticated Polygraph capture for the current Claude Code web session, including follow-up prompts and responses after resume.
+description: Explicitly start OAuth-authenticated Polygraph capture for the current Claude Code web session, including follow-up prompts and responses after resume. Use when the user invokes `/james-polygraph:background-session-start`, including when a Slack-routed Claude Code task delivers that command as literal, unexpanded text.
+when_to_use: The current user explicitly asks to run `/james-polygraph:background-session-start <user task>` or explicitly opts the current Claude Code web session into Polygraph background capture, including a Slack-routed Claude Code task containing that literal command. Invoke this skill before any repository work and preserve the task argument verbatim.
 argument-hint: "<user task>"
+disable-model-invocation: false
+user-invocable: true
 {% if platform == "claude" %}
 allowed-tools:
   - Bash

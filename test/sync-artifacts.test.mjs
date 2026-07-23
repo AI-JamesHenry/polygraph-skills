@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { parse } from 'smol-toml';
 
 import { renderArtifact, rootDir } from '../scripts/src/sync-artifacts/common.mjs';
-import { processAgents, processSkills } from '../scripts/src/sync-artifacts/processors.mjs';
+import {
+  processAgents,
+  processClaudeLegacyCommands,
+  processSkills,
+} from '../scripts/src/sync-artifacts/processors.mjs';
 import {
   buildCodexPluginManifest,
   buildMcpConfig,
@@ -271,6 +275,9 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   assert.match(rendered, /^---\n[\s\S]*?name: background-session-start[\s\S]*?\n---\n/);
   assert.match(rendered, /\/james-polygraph:background-session-start/);
   assert.match(rendered, /\$ARGUMENTS/);
+  assert.match(frontmatter, /when_to_use:.*Slack-routed Claude Code task/i);
+  assert.match(frontmatter, /disable-model-invocation: false/);
+  assert.match(frontmatter, /user-invocable: true/);
   assert.match(rendered, /opt-in boundary/);
   assert.match(rendered, /exactly one Git repository/);
   assert.match(rendered, /mcp__polygraph-oauth-spike__background_session_start/);
@@ -315,6 +322,33 @@ test('background-session-start is an explicit OAuth capture skill', () => {
   );
   assert.doesNotMatch(rendered, /POLYGRAPH_(?:SERVICE_ACCOUNT|API_TOKEN|ACCESS_TOKEN)/);
   assert.doesNotMatch(rendered, /\b(?:list_repos|spawn_agent|create_pr)\s*\(/);
+});
+
+test('Claude packages background-session-start as a legacy plugin command too', () => {
+  const outputDir = mkdtempSync(
+    join(tmpdir(), 'polygraph-claude-background-command-')
+  );
+  const config = {
+    outputDir,
+    skillsDir: 'skills',
+    skillsFile: 'SKILL.md',
+  };
+
+  processSkills('claude', config);
+  processClaudeLegacyCommands(config);
+
+  const skill = readFileSync(
+    join(outputDir, 'skills', 'background-session-start', 'SKILL.md'),
+    'utf8'
+  );
+  const command = readFileSync(
+    join(outputDir, 'commands', 'background-session-start.md'),
+    'utf8'
+  );
+  assert.equal(command, skill);
+  assert.match(command, /name: background-session-start/);
+  assert.match(command, /mcp__polygraph-oauth-spike__background_session_start/);
+  assert.match(command, /\$ARGUMENTS/);
 });
 
 test('Claude plugin hooks keep capture dormant until a session is activated', () => {

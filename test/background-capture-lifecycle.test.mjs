@@ -71,6 +71,85 @@ test('ordinary sessions are a local no-op and transmit no prompt content', async
   }
 });
 
+test('literal Slack command reminds Claude to invoke the background session skill', async () => {
+  const f = fixture();
+  try {
+    const result = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          '/james-polygraph:background-session-start List all root-level files',
+      },
+      { root: f.root },
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, '');
+    const output = JSON.parse(result.stdout);
+    assert.equal(
+      output.hookSpecificOutput.hookEventName,
+      'UserPromptSubmit',
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /Slack-routed Claude Code task/,
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /Skill tool for `james-polygraph:background-session-start`/,
+    );
+    assert.match(
+      output.hookSpecificOutput.additionalContext,
+      /fail closed.*before repository work/i,
+    );
+    assert.equal(existsSync(f.settingsPath), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a prose mention of the background session command is not treated as opt-in', async () => {
+  const f = fixture();
+  try {
+    const result = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          'Why did /james-polygraph:background-session-start fail yesterday?',
+      },
+      { root: f.root },
+    );
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an active capture does not inject a second session-start instruction', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const recoveries = [];
+    const result = await handleBackgroundCaptureHook(
+      {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: PROVIDER_SESSION_ID,
+        prompt:
+          '/james-polygraph:background-session-start Start another session',
+      },
+      {
+        root: f.root,
+        ensureSidecar: async (state) => recoveries.push(state),
+      },
+    );
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+    assert.equal(recoveries.length, 1);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('activation stores a scoped capability for the transcript sidecar', async () => {
   const f = fixture();
   try {

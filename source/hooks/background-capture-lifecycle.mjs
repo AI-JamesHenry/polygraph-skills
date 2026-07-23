@@ -543,6 +543,37 @@ function contextOutput(hookEventName, additionalContext) {
   };
 }
 
+const BACKGROUND_SESSION_START_COMMAND =
+  '/james-polygraph:background-session-start';
+
+function slackSkillInvocationInstruction(prompt) {
+  if (typeof prompt !== 'string') {
+    return null;
+  }
+
+  const invocationLine = prompt
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => {
+      const withoutMention = line.replace(/^@Claude(?:\s+Code)?\s+/i, '');
+      return (
+        withoutMention.startsWith(`${BACKGROUND_SESSION_START_COMMAND} `) &&
+        withoutMention.slice(BACKGROUND_SESSION_START_COMMAND.length).trim()
+          .length > 0
+      );
+    });
+  if (!invocationLine) return null;
+
+  return [
+    `The current user prompt contains the explicit Polygraph opt-in command \`${BACKGROUND_SESSION_START_COMMAND}\`.`,
+    'A Slack-routed Claude Code task can deliver a plugin command as literal text instead of expanding it before the model runs.',
+    `Before any repository work, invoke the Skill tool for \`james-polygraph:background-session-start\` with the exact text after the command as its arguments.`,
+    'If the full background-session-start skill instructions are already expanded in the current context, do not invoke the skill a second time; follow those instructions directly.',
+    'Do not substitute another Polygraph skill, agent, or MCP tool.',
+    'If the skill or its required OAuth connector tool is unavailable, fail closed and report the missing capability before repository work.',
+  ].join(' ');
+}
+
 function promptCaptureInstruction(providerSessionId) {
   return [
     'Polygraph background capture is active for this explicitly opted-in Claude session.',
@@ -586,6 +617,15 @@ export async function handleBackgroundCaptureHook(
 ) {
   const providerSessionId = input?.session_id;
   const state = readBackgroundCapture(providerSessionId, root);
+  if (input?.hook_event_name === 'UserPromptSubmit') {
+    const skillInvocationInstruction = slackSkillInvocationInstruction(
+      input.prompt
+    );
+    if (!state && skillInvocationInstruction) {
+      return contextOutput('UserPromptSubmit', skillInvocationInstruction);
+    }
+  }
+
   if (!state) return emptyResult();
   if (state.version === 4) {
     try {

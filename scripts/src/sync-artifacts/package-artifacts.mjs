@@ -125,6 +125,7 @@ export function finalizeClaudeDist(pkgJson) {
     join(claudeDir, 'package.json'),
     buildPublishPackageJson(pkgJson, '@ai-jameshenry/james-polygraph-claude-plugin', [
       'skills/',
+      'commands/',
       'agents/',
       'hooks/',
       'wip-mcp/',
