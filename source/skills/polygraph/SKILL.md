@@ -76,7 +76,7 @@ Polygraph functionality is available via both MCP tools and CLI commands. Use wh
 | `list_repos` | `polygraph repo list` | Discover candidate repositories. Candidate entries do not include repository descriptions; use `semanticQuery` for natural-language discovery. |
 | `start_session` | `polygraph session start --repo <ids>` | Initialize a Polygraph session with selected repositories |
 | `spawn_agent` | — | Start a new child task or send a follow-up to an active task in another repository. Input: `{ sessionId, repo, instruction, context? }`. Output: `{ taskId, message, status: 'delegated' }`. Follow-up routing is automatic: if the repo already has an active child task, the instruction is delivered to it as a follow-up message; otherwise a new child run starts. A repo has at most one active child at a time. A session resume or reconstruction is read-only context restoration; after resuming, do not use `spawn_agent` to continue changes unless the user explicitly asks for changes. |
-| `show_agent` | — | Poll the status of the specified repo's child (`repo` is required — one call covers one repo). Output: `{ children: PolygraphChildStatusItem[] }` with a single entry for that repo; the item exposes `repositoryId`, `repoFullName`, `status`, `lastOutputLines`, `durationMs`, `instruction`, `agentType?`, `inputRequiredQuestion?`. `status` is an AcpRunStatus: `'created' \| 'in-progress' \| 'input-required' \| 'permission-required' \| 'completed' \| 'failed' \| 'cancelled'` (British double-L on `'cancelled'`). `inputRequiredQuestion` is populated only when `status === 'input-required'`. |
+| `show_agent` | — | Poll one repo's child status (`repo` required — one repo per call). Returns `{ children: [...] }` with a single self-describing entry exposing `status`, `lastOutputLines`, `inputRequiredQuestion`, etc. Full status enum and the poll/state-machine flow are under "Multi-turn tasks". |
 | `stop_agent` | — | Cancel an in-progress child. Output: `{ taskId, state: 'cancelled', sessionPreserved: true, output, message }`. Because `sessionPreserved: true`, the preserved agent session can be restored later for context, but resume must wait for explicit user instructions before making changes. |
 | `push_branch` | — | Push a local git branch to the remote repository. For the repo you are in, this pushes from your current checkout. Requires a session description. |
 | `create_pr` | — | Create draft PRs with session metadata linking related PRs |
@@ -526,26 +526,11 @@ If you call `allow_agent` while the dialog is already open, you create a race: t
 The `allow_agent` and `deny_agent` tools exist for parents whose MCP clients do NOT advertise elicitation capability (opencode TUI today). They are not part of your flow.
 {% endif %}
 
-### 2. Push Branches
+### 2. Publish Changes (Push Branches, Create PRs, Mark Ready)
 
-Once work is complete in a repository, push the branch using `push_branch`. This must be done before creating a PR.
+Publishing covers the branch-to-PR flow: `push_branch` (push local commits; must precede PR creation), `create_pr` (linked draft PRs, including fork PRs via `targetRepository`), `mark_pr_ready` (transition drafts to OPEN), and `associate_pr` (link PRs created outside Polygraph).
 
-`push_branch` pushes from the local checkout: for the repo you are in, that is your current working directory with your commits; for delegated repos, it is the Polygraph-managed clone the child agent worked in. There is no separate session copy of the current repo.
-
-**Parameters:**
-
-- `sessionId` (required): The Polygraph session ID
-- `repo` (required): Repository name or repository ID to push from
-- `branch` (required): Branch name to push to remote
-- `description` (required): A session description is required. Must follow the Session Description Policy.
-
-```
-push_branch(
-  sessionId: "<session-id>",
-  repo: "org/repo-name",
-  branch: "polygraph/ad5fa-add-user-preferences"
-)
-```
+**Whenever you push a branch, create or associate a PR, or mark PRs ready, read [`reference/publish-changes.md`](reference/publish-changes.md) first.** That reference file holds the full flow: parameters and examples for each tool, `push_branch` local-checkout semantics, the PR title format rules, and the session-URL printing steps. `push_branch`, `create_pr`, and `associate_pr` all require a `description` following the Session Description Policy below.
 
 ### Session Description Policy
 
@@ -554,121 +539,18 @@ push_branch(
 **Whenever you write or update a session description, read [`reference/session-description.md`](reference/session-description.md) first.** That reference file holds the full policy: the canonical Markdown-heading template (`## Goal` / `## Current progress` / `## What worked` / `## Next steps`), the dual-audience guidance (humans in the web UI now, agents reconstructing history later), and the formatting building blocks the app renders (callouts, tables, mermaid, links, `link_reference`).
 
 
-### 3. Create Draft PRs
+### 3. Get Current Polygraph Session
 
-Create PRs for all repositories at once using `create_pr`. PRs are created as drafts with session metadata that links related PRs across repos. Branches must be pushed first. For fork PR creation or registration, include `targetRepository` on the PR spec to identify the repository that should receive the PR.
-
-**Parameters:**
-
-- `sessionId` (required): The Polygraph session ID
-- `prs` (required): Array of PR specifications, each containing:
-  - `owner` (required): GitHub repository owner
-  - `repo` (required): GitHub repository name
-  - `title` (required): PR title
-  - `body` (required): PR description (session metadata is appended automatically)
-  - `branch` (required): Branch name that was pushed
-  - `targetRepository` (optional): Target GitHub repository for fork PR creation or registration, as `owner/repo`. Omit for same-repository PRs.
-- `description` (required): Must follow the Session Description Policy.
-
-**PR title format (applies to parent and child agents):**
-
-- PR titles become squash-merge commit messages in most repos. They MUST follow the target repo's commit convention (e.g., Conventional Commits: `<type>(<scope>): <subject>`).
-- Do NOT add agent-identifier prefixes such as `[codex]`, `[claude]`, or `[opencode]` to PR titles. These prefixes violate commit-lint rules and pollute the git history.
-
-```
-create_pr(
-  sessionId: "<session-id>",
-  prs: [
-    {
-      owner: "org",
-      repo: "frontend",
-      title: "feat: Add user preferences UI",
-      body: "Part of multi-repo user preferences feature",
-      branch: "polygraph/ad5fa-add-user-preferences"
-    },
-    {
-      owner: "org",
-      repo: "backend",
-      title: "feat: Add user preferences API",
-      body: "Part of multi-repo user preferences feature",
-      branch: "polygraph/ad5fa-add-user-preferences"
-    }
-  ]
-)
-```
-
-For fork PR creation or registration, keep `owner` and `repo` set to the source repository that owns the pushed branch and set `targetRepository` to the target repository:
-
-```
-create_pr(
-  sessionId: "<session-id>",
-  prs: [
-    {
-      owner: "contributor",
-      repo: "frontend-fork",
-      targetRepository: "org/frontend",
-      title: "feat: Add user preferences UI",
-      body: "Part of multi-repo user preferences feature",
-      branch: "polygraph/ad5fa-add-user-preferences"
-    }
-  ]
-)
-```
-
-**After creating PRs**, always print the Polygraph session URL:
-
-```
-**Polygraph session:** POLYGRAPH_SESSION_URL
-```
-
-### 4. Get Current Polygraph Session
-
-Check the details of a session using `show_session` or `polygraph session show --details <session-id>`. Returns the full session state including repositories, PRs, CI status, and the Polygraph session URL.
+Check the details of a session using `show_session` or `polygraph session show --details <session-id>`. Returns the full session state — basic metadata like id, url & description timeline, plus the connected repositories, `pullRequests[]`, per-PR `ciStatus`, and `session.linkedReferences`.
 
 **Parameters:**
 
 - `sessionId` (required): The Polygraph session ID
 
-**Returns:**
+**CI status rules:**
 
-- `session.sessionId`: The session ID
-- `session.polygraphSessionUrl`: URL to the Polygraph session UI
-- `session.description`: DescriptionItem[] timeline describing the session.
-- `session.agentSessionId`: The agent CLI session ID — captured automatically by the MCP server (null if no agent has run yet).
-- `session.linkedReferences`: Array of references linked to this session
-- Session repository entries: Array of connected repositories, each with:
-  - `id`: Repository ID
-  - `name`: Repository name
-  - `defaultBranch`: Default branch (e.g., `main`)
-  - `vcsConfiguration.repositoryFullName`: Full repo name (e.g., `org/repo`)
-  - `vcsConfiguration.provider`: VCS provider (e.g., `GITHUB`)
-  - description field: AI-generated description of what this repository does (may be null)
-  - `initiator`: Whether this repository initiated the session
-- `session.dependencyGraph`: Graph of repository dependency `edges`
-- `session.pullRequests[]`: Array of PRs, each with:
-  - `url`: PR URL
-  - `branch`: Branch name
-  - `baseBranch`: Target branch
-  - `title`: PR title
-  - `status`: One of `DRAFT`, `OPEN`, `MERGED`, `CLOSED`
-  - `repoId`: Associated repository ID
-  - `relatedPRs`: Array of related PR URLs across repos
-- `session.ciStatus`: CI pipeline status keyed by PR ID, each containing:
-  - `status`: One of `SUCCEEDED`, `FAILED`, `IN_PROGRESS`, `NOT_STARTED` (null if no CIPE and no external CI)
-  - `cipeUrl`: URL to the CI pipeline execution details (null if no CIPE). This is a human-facing Nx Cloud web link — display it to the user, but never fetch, curl, or poll it directly; CIPE data is only accessible programmatically via the Nx MCP `ci_information` tool
-  - `completedAt`: Epoch millis timestamp, set only when the CIPE has completed (null otherwise)
-  - `selfHealingStatus`: The self-healing fix status string from Nx Cloud's AI fix feature (null if no AI fix exists)
-  - `externalCIRuns`: Array of external CI runs (present when no CIPE but external CI data exists, e.g., GitHub Actions). Each run contains:
-    - `runId`: GitHub Actions run ID
-    - `name`: Workflow name
-    - `status`: Run status (`completed`, `in_progress`, `queued`)
-    - `conclusion`: Run conclusion (`success`, `failure`, `cancelled`, `timed_out`, or null)
-    - `url`: GitHub Actions run URL
-    - `jobs`: Array of jobs in the run, each with:
-      - `jobId`: Job ID (use with `get_ci_logs`)
-      - `name`: Job name
-      - `status`: Job status
-      - `conclusion`: Job conclusion (or null)
+- `ciStatus[prId].cipeUrl` (null if no CIPE) is a human-facing Nx Cloud web link — display it to the user, but never fetch, curl, or poll it directly; CIPE data is only accessible programmatically via the Nx MCP `ci_information` tool.
+- When no CIPE exists, external CI data (e.g., GitHub Actions) appears in `ciStatus[prId].externalCIRuns[]` as runs with nested `jobs[]`; each job's `jobId` is the input for `get_ci_logs`.
 
 ```
 show_session(sessionId: "<session-id>")
@@ -715,67 +597,7 @@ link_reference({
 
 The canonical MCP parameters are `{ sessionId, reference }`. There is no unlink command.
 
-### 5. Mark PRs Ready
-
-Once all changes are verified and ready to merge, use `mark_pr_ready` to transition PRs from DRAFT to OPEN status.
-
-**Parameters:**
-
-- `sessionId` (required): The Polygraph session ID
-- `prUrls` (required): Array of PR URLs to mark as ready for review
-
-```
-mark_pr_ready(
-  sessionId: "<session-id>",
-  prUrls: [
-    "https://github.com/org/frontend/pull/123",
-    "https://github.com/org/backend/pull/456"
-  ]
-)
-```
-
-**After marking PRs as ready**, always print the Polygraph session URL so the user can easily access the session overview. Call `show_session` and display:
-
-```
-**Polygraph session:** POLYGRAPH_SESSION_URL
-```
-
-Where `POLYGRAPH_SESSION_URL` is from `polygraphSessionUrl` in the response.
-
-### 6. Associate Existing PRs
-
-Use `associate_pr` to link pull requests that were created outside of Polygraph (e.g., manually or by CI) to the current session. This is useful when PRs already exist for the branches in the session and you want Polygraph to track them.
-
-Provide either a `prUrl` to associate a specific PR, or a `branch` name plus `repo` to find and associate PRs for a source repository.
-
-**Parameters:**
-
-- `sessionId` (required): The Polygraph session ID
-- `prUrl` (optional): URL of an existing pull request to associate
-- `branch` (optional): Branch name to find and associate PRs for
-- `repo` (optional): Source repository for branch-based association. Required when using `branch` in a multi-repo session.
-- `description` (required): Must follow the Session Description Policy.
-
-```
-associate_pr(
-  sessionId: "<session-id>",
-  prUrl: "https://github.com/org/repo/pull/123"
-)
-```
-
-Or by branch:
-
-```
-associate_pr(
-  sessionId: "<session-id>",
-  repo: "org/repo",
-  branch: "feature/my-changes"
-)
-```
-
-**Returns** the list of PRs now associated with the session.
-
-### 7. Add Repositories to a Session
+### 4. Add Repositories to a Session
 
 Use `add_repo` to add repositories to an existing Polygraph session after it has already started.
 
@@ -795,7 +617,7 @@ add_repo(
 )
 ```
 
-### 8. Archive Session
+### 5. Archive Session
 
 **IMPORTANT: Only call this tool when the user explicitly asks to archive or close the session.** Do not archive sessions automatically as part of the workflow.
 
