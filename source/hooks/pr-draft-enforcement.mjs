@@ -87,16 +87,49 @@ const DRAFT_ANY_VALUE_PATTERN = /(?:^|\s)--draft=\S*/;
 //     value can never be mistaken for the real thing. Because it is the
 //     same length as `command`, a match index found in `blanked` is also
 //     the correct index into `command`.
-//   - unbalanced: true if a quote was opened and never closed.
+//   - unbalanced: true if a quote was opened and never closed, OR if the
+//     command ends in a lone backslash with nothing left to escape (see the
+//     escape handling below) — both are ambiguous the same way, so both
+//     fold into the same fail-closed-to-deny path in the caller.
 //   - hasSubstitution: true if a backtick or `$(` appears outside all
 //     quotes, or inside a double-quoted span (the shell still executes it
 //     there) — but not inside a single-quoted span (the shell never does).
+//
+// Backslash escaping mirrors real bash: outside all quoting and inside
+// double quotes, an unescaped `\` escapes the next character, so `\"`
+// never opens or closes a double-quoted span, `\;`/`\&`/etc. outside quotes
+// are not compound operators, and `\$(`/`` \` `` outside quotes are not
+// substitutions. Inside single quotes, bash honors no escapes at all, so
+// `\` there is left completely untouched. An escaped pair is always blanked
+// together (both bytes become spaces) so neither byte can be mistaken for a
+// quote boundary, operator, or draft flag downstream.
 function scanQuotedRegions(command) {
   let blanked = '';
   let quote = null;
   let hasSubstitution = false;
+  let trailingEscape = false;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
+
+    if (ch === '\\' && quote !== "'") {
+      const next = command[i + 1];
+      if (next === undefined) {
+        // Lone backslash at the end of the command: nothing to escape.
+        // Ambiguous rather than literal, so it is folded into the
+        // unbalanced/deny path instead of being treated as ordinary text.
+        trailingEscape = true;
+        blanked += quote ? ' ' : ch;
+        continue;
+      }
+      // Consume the backslash together with the character it escapes as a
+      // single literal unit: it cannot open/close a quote, act as a
+      // compound operator, or start a substitution, so both bytes are
+      // blanked regardless of current quote state.
+      blanked += '  ';
+      i++;
+      continue;
+    }
+
     if (quote) {
       if (ch === quote) {
         quote = null;
@@ -122,7 +155,11 @@ function scanQuotedRegions(command) {
     }
     blanked += ch;
   }
-  return { blanked, unbalanced: quote !== null, hasSubstitution };
+  return {
+    blanked,
+    unbalanced: quote !== null || trailingEscape,
+    hasSubstitution,
+  };
 }
 
 function defaultRoot() {

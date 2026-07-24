@@ -411,6 +411,141 @@ test('an unbalanced quote is ambiguous and denied rather than silently passed th
 });
 
 // ---------------------------------------------------------------------------
+// Bash: backslash-escaped quotes (fail-closed round 2)
+// ---------------------------------------------------------------------------
+
+test('a draft-flag-shaped substring behind an escaped quote inside --title is not exposed, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command =
+      'gh pr create --title "she said \\"add --draft support\\" today"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command:
+        'gh pr create --draft --title "she said \\"add --draft support\\" today"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an && hidden behind an escaped quote inside --body is still tracked as inside the quoted span, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --body "escaped \\" then && here"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: 'gh pr create --draft --body "escaped \\" then && here"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a double backslash before the closing quote is a literal backslash, and the quote genuinely closes', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title "ends with backslash\\\\"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: 'gh pr create --draft --title "ends with backslash\\\\"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a command ending in a lone trailing backslash is ambiguous and denied', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title x \\';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    denyOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an apostrophe inside a double-quoted value does not toggle single-quote state, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title "it\'s a great feature"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: 'gh pr create --draft --title "it\'s a great feature"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a double quote inside a single-quoted value does not toggle double-quote state, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = "gh pr create --title 'she said \"hi\"'";
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: "gh pr create --draft --title 'she said \"hi\"'",
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an escaped quote outside all quoting does not open a quote, and never resolves to silence', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title foo\\"bar';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    // Whatever the scanner resolves this to, it must never be silence: a
+    // real, unambiguous `gh pr create` token sequence is present.
+    assert.notDeepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+    const parsed = JSON.parse(result.stdout);
+    const decision = parsed.hookSpecificOutput.permissionDecision;
+    assert.ok(
+      decision === 'allow' || decision === 'deny',
+      `expected allow or deny, got ${decision}`
+    );
+    if (decision === 'allow') {
+      assert.equal(
+        parsed.hookSpecificOutput.updatedInput.command,
+        'gh pr create --draft --title foo\\"bar'
+      );
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Bash: non-anchored (prefixed) simple invocations (fail-closed round 1)
 // ---------------------------------------------------------------------------
 
