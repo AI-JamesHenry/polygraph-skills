@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-draft-enforcement.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-command-redirect.mjs"
           }
         ]
       }
@@ -68,10 +68,6 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-branch-observer.mjs"
-          },
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-command-observer.mjs"
           }
         ]
       }

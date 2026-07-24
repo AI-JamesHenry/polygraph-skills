@@ -115,12 +115,24 @@ This stops the sidecar and removes the marker and runtime files.
 Uninstalling the plugin removes the hooks; any remaining state can be deleted
 by removing `~/.polygraph/background-capture/`.
 
-## Pull request observation and draft enforcement
+## Pull request management
+
+A cloud session creates pull requests with the remote `background_pr_create`
+MCP tool, not `gh` or a generic GitHub MCP server. The server validates the
+call end to end: it checks that the calling session owns the target
+Polygraph session, that the session has access to the target repository,
+that the branch was actually pushed by this session, and it always opens the
+PR as a draft. It also protects against a duplicate PR on a branch that
+already has one open. None of that validation lives in the plugin — the
+plugin has no way to check session ownership, repo access, or branch
+provenance, and does not try to.
+
+Marking a PR ready for review, and editing an existing PR's title, body, or
+base branch, are human actions taken from the Polygraph session page in the
+web UI. An autonomous cloud session does not do either on its own.
 
 Once a session activates capture (see "Opt-in and capture boundary" above),
-three preloaded plugin hooks give Polygraph visibility into PR work without
-requiring the claude.ai "Create PR" button, which is provider-side and has no
-reach into a Polygraph-tracked branch:
+two preloaded plugin hooks support this:
 
 - **Branch observation (backbone).** A `PostToolUse` hook resolves the
   current git branch after every tool call and, whenever the checked-out
@@ -128,44 +140,48 @@ reach into a Polygraph-tracked branch:
   fire-once: switching `A` -> `B` -> `A` reports `branch_active` for `A`
   again), posts `POST {captureHookUrl}/pr` with `kind: "branch_active"`. The
   server dedupes by `eventId`, so a repeat report for the same branch is a
-  no-op. This is the low-confidence, always-on signal: it needs no `gh` or
-  specific command shape, only a checked-out branch.
-- **In-stream command observation (fast path).** A second `PostToolUse` hook
-  classifies the command that just ran — `gh pr create`, `gh pr ready`,
-  `gh pr edit`, `git push`, or an MCP `create_pull_request` tool call — and,
-  for a single unambiguous invocation (no chaining, piping, redirection, or
-  substitution), posts a richer event: `branch_pushed` for `git push`,
-  `pr_created` for `gh pr create` or the MCP tool, `pr_ready` for
-  `gh pr ready`, `pr_updated` for `gh pr edit`. Anything compound or
-  ambiguous is left alone; the branch-identity backbone still covers it.
-- **Draft enforcement (autonomous creation only).** A `PreToolUse` hook
-  intercepts `gh pr create` and the MCP `create_pull_request` tool before
-  they run. A single, standalone invocation without an existing draft flag is
-  rewritten in place to add `--draft` (or `draft: true`) and allowed to
-  proceed. A compound invocation (chained, piped, redirected, or otherwise
-  ambiguous) or one that explicitly requests non-draft (`--draft=false`) is
-  denied, with a reason telling the agent how to re-run it as a draft,
-  rather than risking a silent misclassification. It does not touch
-  `gh pr ready`, `gh pr edit`, or `git push`.
+  no-op. This signal feeds Polygraph's webhook-based adoption of
+  provider-created PRs: because the claude.ai "Create PR" button is
+  provider-side and cannot be wired into a Polygraph-tracked branch
+  directly, Polygraph instead adopts the PR server-side over a webhook once
+  the branch behind it has been observed here.
 
-The capture endpoint's `/pr` route accepts these event kinds:
+  The same hook also reports `kind: "branch_pushed"` for the current branch
+  when the tool call that just ran was a successful, standalone `git push`
+  (no chaining, piping, or redirection — a compound command is left for the
+  server-side push webhook to record instead). The server stores that as
+  pushed-branch evidence, which is what makes the branch eligible for
+  `background_pr_create` without waiting on the GitHub push webhook. The
+  webhook remains the stronger signal (signature-verified, carries the head
+  SHA), and the server re-verifies the branch against the repository before
+  creating any PR, so this report is workflow eligibility, not a security
+  boundary.
+- **PR-command redirect.** A `PreToolUse` hook denies `gh pr create`,
+  `gh pr ready`, `gh pr edit`, and any MCP tool named
+  `mcp__*__create_pull_request` before they run, each with a reason pointing
+  the agent at the right alternative: call `background_pr_create` instead of
+  `gh` for creation, and ask the user to act from the Polygraph session page
+  for marking ready or editing. Detection is non-anchored and quote-aware —
+  it recognizes the command anywhere in the line (including after an
+  env-var prefix, `sudo`, or a compound operator like `&&`) but ignores a
+  matching phrase that only appears inside a quoted flag value — and it
+  denies every match unconditionally: there is no rewrite path, no
+  allowed shape, and no `--draft` flag that lets a command through.
+  `git push` is left alone; branch observation covers it instead.
 
-| Kind            | Meaning                                             |
-| ---------------- | ---------------------------------------------------- |
-| `branch_active`  | The session has a checked-out branch (new or changed) |
-| `branch_pushed`  | `git push` ran on the current branch                 |
-| `pr_created`     | A PR was opened (`gh pr create` or MCP `create_pull_request`) |
-| `pr_ready`       | A draft PR was marked ready (`gh pr ready`)          |
-| `pr_updated`     | An existing PR was edited (`gh pr edit`)             |
+**Hooks here are routing/UX only, not a security boundary.** Every guarantee
+this section describes — session ownership, repo access, branch
+eligibility, always-draft, protection against a duplicate PR — is enforced
+server-side by `background_pr_create`, independent of whether the redirect
+hook runs, is bypassed, or is misconfigured; the hook's only job is to give
+the agent a fast, local nudge toward the right tool instead of a slower,
+more confusing server-side rejection.
 
-All three hooks share the same opt-in boundary as the rest of this preview:
+Both hooks share the same opt-in boundary as the rest of this preview:
 without the activation marker, each is a silent local no-op — no filesystem
-writes beyond checking for the marker, and no network calls. Nothing here
-changes when capture activates or what it requires; PR observation only adds
-more detail to a session that already opted in. Because the claude.ai
-"Create PR" button is provider-side and cannot be wired into a
-Polygraph-tracked branch directly, Polygraph instead adopts the PR
-server-side over a webhook once the branch has been observed.
+writes beyond checking for the marker, and no network calls (the redirect
+hook makes no network calls even when active; only the branch observer
+does).
 
 ## Not included in this preview
 

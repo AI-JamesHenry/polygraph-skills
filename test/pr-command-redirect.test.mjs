@@ -3,24 +3,28 @@ import assert from 'node:assert/strict';
 import {
   existsSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { enforceDraftPr } from '../source/hooks/pr-draft-enforcement.mjs';
+import { redirectPrCommand } from '../source/hooks/pr-command-redirect.mjs';
 import { activateBackgroundCapture } from '../source/hooks/background-capture-lifecycle.mjs';
 
 const PROVIDER_SESSION_ID = '88b2ff2e-b146-458c-85fc-109c7bc12f26';
 const CAPTURE_HOOK_URL =
   'https://polygraph.example.test/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456';
-const DENY_REASON =
-  'Polygraph cloud sessions create draft PRs. Re-run gh pr create as a single stand-alone command (no shell operators) with --draft.';
+
+const CREATE_DENY_REASON =
+  'Polygraph cloud sessions create pull requests with the background_pr_create MCP tool, which opens a draft on a branch this session pushed. Call background_pr_create instead of gh.';
+const READY_DENY_REASON =
+  'Marking a Polygraph cloud-session PR ready for review is a human action. Ask the user to mark it ready from the Polygraph session page.';
+const EDIT_DENY_REASON =
+  'Editing a Polygraph cloud-session PR is a human action. Ask the user to update it from the Polygraph session page, or include the change when creating the PR with background_pr_create.';
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'polygraph-draft-enforcement-'));
+  const root = mkdtempSync(join(tmpdir(), 'polygraph-pr-command-redirect-'));
   const transcriptPath = join(root, 'claude-transcript.jsonl');
   writeFileSync(
     transcriptPath,
@@ -66,26 +70,14 @@ function mcpInput(toolName, toolInput) {
   };
 }
 
-function allowOutput(result, updatedInput) {
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.stderr, '');
-  assert.deepEqual(JSON.parse(result.stdout), {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'allow',
-      updatedInput,
-    },
-  });
-}
-
-function denyOutput(result) {
+function denyOutput(result, reason) {
   assert.equal(result.exitCode, 0);
   assert.equal(result.stderr, '');
   assert.deepEqual(JSON.parse(result.stdout), {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: DENY_REASON,
+      permissionDecisionReason: reason,
     },
   });
 }
@@ -101,7 +93,7 @@ function noOutput(result) {
 test('without an active marker, a bare gh pr create is a silent no-op', async () => {
   const f = fixture();
   try {
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('gh pr create --title "Add feature" --body "desc"'),
       { root: f.root, home: f.home }
     );
@@ -115,7 +107,7 @@ test('without an active marker, a bare gh pr create is a silent no-op', async ()
 test('without an active marker, a compound gh pr create is also a silent no-op', async () => {
   const f = fixture();
   try {
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('gh pr create --title x && echo done'),
       { root: f.root, home: f.home }
     );
@@ -130,7 +122,7 @@ test('an invalid provider session id is a silent no-op', async () => {
   try {
     const input = bashInput('gh pr create');
     input.session_id = 'not a valid id';
-    const result = await enforceDraftPr(input, { root: f.root, home: f.home });
+    const result = await redirectPrCommand(input, { root: f.root, home: f.home });
     noOutput(result);
   } finally {
     f.cleanup();
@@ -138,100 +130,84 @@ test('an invalid provider session id is a silent no-op', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bash: simple gh pr create rewrite
+// Bash: gh pr create — always denied now, regardless of flags or shape
 // ---------------------------------------------------------------------------
 
-test('a simple gh pr create with no draft flag gets --draft appended right after create', async () => {
+test('a simple gh pr create with no draft flag is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(bashInput('gh pr create'), {
+    const result = await redirectPrCommand(bashInput('gh pr create'), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, { command: 'gh pr create --draft' });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('--title/--body and their values (including quoting) are preserved byte-for-byte', async () => {
+test('gh pr create with --title/--body (including quoting) is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command =
       'gh pr create --title "Add a great feature" --body "See full description here"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command:
-        'gh pr create --draft --title "Add a great feature" --body "See full description here"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('--draft already present passes through untouched', async () => {
+test('gh pr create with --draft already present is denied, not passed through', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('gh pr create --title x --draft'),
       { root: f.root, home: f.home }
     );
-    noOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('-d already present passes through untouched', async () => {
+test('gh pr create with -d already present is denied, not passed through', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(bashInput('gh pr create -d'), {
+    const result = await redirectPrCommand(bashInput('gh pr create -d'), {
       root: f.root,
       home: f.home,
     });
-    noOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('-d present among other flags passes through untouched', async () => {
+test('leading/trailing whitespace in the command is tolerated', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
-      bashInput('gh pr create --title x -d --body y'),
-      { root: f.root, home: f.home }
-    );
-    noOutput(result);
-  } finally {
-    f.cleanup();
-  }
-});
-
-test('leading/trailing whitespace in the command is tolerated (and trimmed)', async () => {
-  const f = fixture();
-  try {
-    await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('  gh pr create --title x  '),
       { root: f.root, home: f.home }
     );
-    allowOutput(result, { command: 'gh pr create --draft --title x' });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
 // ---------------------------------------------------------------------------
-// Bash: compound / ambiguous gh pr create denies
+// Bash: compound gh pr create — still denied (compound-ness no longer
+// changes the outcome, since there is no rewrite path any more)
 // ---------------------------------------------------------------------------
 
 for (const [label, command] of [
@@ -246,30 +222,76 @@ for (const [label, command] of [
   ['multi-line', 'gh pr create --title x\necho done'],
   ['prefixed by another command', 'cd repo && gh pr create --title x'],
 ]) {
-  test(`compound/ambiguous gh pr create (${label}) is denied`, async () => {
+  test(`compound gh pr create (${label}) is denied`, async () => {
     const f = fixture();
     try {
       await activate(f);
-      const result = await enforceDraftPr(bashInput(command), {
+      const result = await redirectPrCommand(bashInput(command), {
         root: f.root,
         home: f.home,
       });
-      denyOutput(result);
+      denyOutput(result, CREATE_DENY_REASON);
     } finally {
       f.cleanup();
     }
   });
 }
 
-test('a compound command with no gh pr create at all is a silent no-op', async () => {
+test('a compound command with no gh pr create/ready/edit at all is a silent no-op', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('npm test && npm run build'),
       { root: f.root, home: f.home }
     );
     noOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Bash: gh pr ready / gh pr edit — denied with their own human-action reason
+// ---------------------------------------------------------------------------
+
+test('gh pr ready is denied with the human-action reason', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await redirectPrCommand(bashInput('gh pr ready 42'), {
+      root: f.root,
+      home: f.home,
+    });
+    denyOutput(result, READY_DENY_REASON);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('gh pr edit is denied with the human-action reason', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await redirectPrCommand(bashInput('gh pr edit 7'), {
+      root: f.root,
+      home: f.home,
+    });
+    denyOutput(result, EDIT_DENY_REASON);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('gh pr ready hidden in a compound command is still denied', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await redirectPrCommand(
+      bashInput('cd repo && gh pr ready 42'),
+      { root: f.root, home: f.home }
+    );
+    denyOutput(result, READY_DENY_REASON);
   } finally {
     f.cleanup();
   }
@@ -283,7 +305,7 @@ test('an unrelated Bash command produces no output', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(bashInput('npm test'), {
+    const result = await redirectPrCommand(bashInput('npm test'), {
       root: f.root,
       home: f.home,
     });
@@ -293,17 +315,15 @@ test('an unrelated Bash command produces no output', async () => {
   }
 });
 
-test('gh pr ready / gh pr edit / git push are left alone (not gh pr create)', async () => {
+test('git push is left alone (branch observation covers it instead)', async () => {
   const f = fixture();
   try {
     await activate(f);
-    for (const command of ['gh pr ready 42', 'gh pr edit 7', 'git push']) {
-      const result = await enforceDraftPr(bashInput(command), {
-        root: f.root,
-        home: f.home,
-      });
-      noOutput(result);
-    }
+    const result = await redirectPrCommand(bashInput('git push'), {
+      root: f.root,
+      home: f.home,
+    });
+    noOutput(result);
   } finally {
     f.cleanup();
   }
@@ -319,7 +339,7 @@ test('a non-string tool_input.command produces no output', async () => {
       tool_name: 'Bash',
       tool_input: {},
     };
-    const result = await enforceDraftPr(input, { root: f.root, home: f.home });
+    const result = await redirectPrCommand(input, { root: f.root, home: f.home });
     noOutput(result);
   } finally {
     f.cleanup();
@@ -327,190 +347,190 @@ test('a non-string tool_input.command produces no output', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bash: quoted flag-lookalikes and operators (fail-closed round 1)
+// Bash: quoted lookalikes and operators (fail-closed round 1) — still denied
 // ---------------------------------------------------------------------------
 
-test('a quoted --draft lookalike in --title is not mistaken for the real flag, and gets rewritten', async () => {
+test('a quoted --draft lookalike in --title does not change the create denial', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --title "add --draft support"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: 'gh pr create --draft --title "add --draft support"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a quoted -d lookalike in --body is not mistaken for the real flag, and gets rewritten', async () => {
+test('a quoted "gh pr ready" phrase inside --body is not mistaken for the real invocation', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const command = 'gh pr create --body "we use the -d flag by convention"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const command =
+      'gh pr create --body "we announced gh pr ready as the way to publish"';
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command:
-        'gh pr create --draft --body "we use the -d flag by convention"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a quoted && inside --body is not treated as a compound operator, and gets rewritten with quoting intact byte-for-byte', async () => {
+test('a quoted && inside --body is not treated as ending detection early, and is still denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --body "a && b"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, { command: 'gh pr create --draft --body "a && b"' });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a $( ) command substitution inside double quotes still executes there, so it is denied', async () => {
+test('a $( ) command substitution inside double quotes is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --body "run $(x)"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    denyOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('an unbalanced quote is ambiguous and denied rather than silently passed through', async () => {
+test('an unbalanced quote falls back to scanning the raw command, and is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --title "unterminated';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    denyOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an unbalanced quote with no real gh pr subcommand present is a silent no-op', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'echo "unterminated';
+    const result = await redirectPrCommand(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    noOutput(result);
   } finally {
     f.cleanup();
   }
 });
 
 // ---------------------------------------------------------------------------
-// Bash: backslash-escaped quotes (fail-closed round 2)
+// Bash: backslash-escaped quotes (fail-closed round 2) — still denied
 // ---------------------------------------------------------------------------
 
-test('a draft-flag-shaped substring behind an escaped quote inside --title is not exposed, and gets rewritten', async () => {
+test('a draft-flag-shaped substring behind an escaped quote inside --title does not affect the denial', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command =
       'gh pr create --title "she said \\"add --draft support\\" today"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command:
-        'gh pr create --draft --title "she said \\"add --draft support\\" today"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('an && hidden behind an escaped quote inside --body is still tracked as inside the quoted span, and gets rewritten', async () => {
+test('an && hidden behind an escaped quote inside --body does not affect the denial', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --body "escaped \\" then && here"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: 'gh pr create --draft --body "escaped \\" then && here"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a double backslash before the closing quote is a literal backslash, and the quote genuinely closes', async () => {
+test('a double backslash before the closing quote is a literal backslash, and the command is still denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --title "ends with backslash\\\\"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: 'gh pr create --draft --title "ends with backslash\\\\"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a command ending in a lone trailing backslash is ambiguous and denied', async () => {
+test('a command ending in a lone trailing backslash falls back to the raw scan, and is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --title x \\';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    denyOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('an apostrophe inside a double-quoted value does not toggle single-quote state, and gets rewritten', async () => {
+test('an apostrophe inside a double-quoted value does not toggle single-quote state, and the command is still denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'gh pr create --title "it\'s a great feature"';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: 'gh pr create --draft --title "it\'s a great feature"',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a double quote inside a single-quoted value does not toggle double-quote state, and gets rewritten', async () => {
+test('a double quote inside a single-quoted value does not toggle double-quote state, and the command is still denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = "gh pr create --title 'she said \"hi\"'";
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: "gh pr create --draft --title 'she said \"hi\"'",
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
@@ -521,76 +541,62 @@ test('an escaped quote outside all quoting does not open a quote, and never reso
   try {
     await activate(f);
     const command = 'gh pr create --title foo\\"bar';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    // Whatever the scanner resolves this to, it must never be silence: a
-    // real, unambiguous `gh pr create` token sequence is present.
-    assert.notDeepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
-    const parsed = JSON.parse(result.stdout);
-    const decision = parsed.hookSpecificOutput.permissionDecision;
-    assert.ok(
-      decision === 'allow' || decision === 'deny',
-      `expected allow or deny, got ${decision}`
-    );
-    if (decision === 'allow') {
-      assert.equal(
-        parsed.hookSpecificOutput.updatedInput.command,
-        'gh pr create --draft --title foo\\"bar'
-      );
-    }
+    // A real, unambiguous `gh pr create` token sequence is present, so this
+    // must never resolve to silence.
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
 // ---------------------------------------------------------------------------
-// Bash: non-anchored (prefixed) simple invocations (fail-closed round 1)
+// Bash: non-anchored (prefixed) invocations (fail-closed round 1) — denied
 // ---------------------------------------------------------------------------
 
-test('an inline env-var-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+test('an inline env-var-prefixed gh pr create is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'GH_TOKEN=x gh pr create --title x';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, {
-      command: 'GH_TOKEN=x gh pr create --draft --title x',
-    });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a `time`-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+test('a `time`-prefixed gh pr create is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'time gh pr create --title x';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, { command: 'time gh pr create --draft --title x' });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('a `sudo`-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+test('a `sudo`-prefixed gh pr create is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const command = 'sudo gh pr create --title x';
-    const result = await enforceDraftPr(bashInput(command), {
+    const result = await redirectPrCommand(bashInput(command), {
       root: f.root,
       home: f.home,
     });
-    allowOutput(result, { command: 'sudo gh pr create --draft --title x' });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
@@ -600,7 +606,7 @@ test('ghe pr create (not the real gh binary) does not match and produces no outp
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('ghe pr create --title x'),
       { root: f.root, home: f.home }
     );
@@ -614,7 +620,7 @@ test('gh prx create (not the real subcommand) does not match and produces no out
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       bashInput('gh prx create --title x'),
       { root: f.root, home: f.home }
     );
@@ -625,42 +631,10 @@ test('gh prx create (not the real subcommand) does not match and produces no out
 });
 
 // ---------------------------------------------------------------------------
-// Bash: --draft=<value> (fail-closed round 1)
+// MCP create_pull_request tools — always denied now
 // ---------------------------------------------------------------------------
 
-test('--draft=false is ambiguous intent and is denied, not rewritten', async () => {
-  const f = fixture();
-  try {
-    await activate(f);
-    const result = await enforceDraftPr(
-      bashInput('gh pr create --title x --draft=false'),
-      { root: f.root, home: f.home }
-    );
-    denyOutput(result);
-  } finally {
-    f.cleanup();
-  }
-});
-
-test('--draft=true already counts as draft and passes through untouched', async () => {
-  const f = fixture();
-  try {
-    await activate(f);
-    const result = await enforceDraftPr(
-      bashInput('gh pr create --title x --draft=true'),
-      { root: f.root, home: f.home }
-    );
-    noOutput(result);
-  } finally {
-    f.cleanup();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// MCP create_pull_request tools
-// ---------------------------------------------------------------------------
-
-test('an MCP create_pull_request call gets draft: true merged in, other fields untouched', async () => {
+test('an MCP create_pull_request call is denied with the create reason', async () => {
   const f = fixture();
   try {
     await activate(f);
@@ -672,56 +646,41 @@ test('an MCP create_pull_request call gets draft: true merged in, other fields u
       head: 'feature/x',
       base: 'main',
     };
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       mcpInput('mcp__github__create_pull_request', toolInput),
       { root: f.root, home: f.home }
     );
-    allowOutput(result, { ...toolInput, draft: true });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('an MCP create_pull_request call with draft already true is a no-op', async () => {
+test('an MCP create_pull_request call with draft already true is still denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const toolInput = { owner: 'nrwl', repo: 'ocean', draft: true };
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       mcpInput('mcp__github__create_pull_request', toolInput),
       { root: f.root, home: f.home }
     );
-    noOutput(result);
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
 });
 
-test('an MCP create_pull_request call with draft: false gets it flipped to true', async () => {
-  const f = fixture();
-  try {
-    await activate(f);
-    const toolInput = { owner: 'nrwl', repo: 'ocean', draft: false };
-    const result = await enforceDraftPr(
-      mcpInput('mcp__github__create_pull_request', toolInput),
-      { root: f.root, home: f.home }
-    );
-    allowOutput(result, { owner: 'nrwl', repo: 'ocean', draft: true });
-  } finally {
-    f.cleanup();
-  }
-});
-
-test('a Polygraph-namespaced MCP create_pull_request tool also matches', async () => {
+test('a Polygraph-namespaced MCP create_pull_request tool also matches and is denied', async () => {
   const f = fixture();
   try {
     await activate(f);
     const toolInput = { owner: 'nrwl', repo: 'ocean' };
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       mcpInput('mcp__polygraph_polygraph-mcp__create_pull_request', toolInput),
       { root: f.root, home: f.home }
     );
-    allowOutput(result, { ...toolInput, draft: true });
+    denyOutput(result, CREATE_DENY_REASON);
   } finally {
     f.cleanup();
   }
@@ -731,7 +690,7 @@ test('a non-matching MCP tool name produces no output', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(
+    const result = await redirectPrCommand(
       mcpInput('mcp__github__update_pull_request', { owner: 'nrwl' }),
       { root: f.root, home: f.home }
     );
@@ -749,7 +708,7 @@ test('the result never leaks the capture URL', async () => {
   const f = fixture();
   try {
     await activate(f);
-    const result = await enforceDraftPr(bashInput('gh pr create'), {
+    const result = await redirectPrCommand(bashInput('gh pr create'), {
       root: f.root,
       home: f.home,
     });
@@ -769,7 +728,7 @@ test('a corrupt marker file is treated as absent (soft failure, no crash)', asyn
       join(f.root, 'background-capture', `claude-${PROVIDER_SESSION_ID}.json`),
       'not json'
     );
-    const result = await enforceDraftPr(bashInput('gh pr create'), {
+    const result = await redirectPrCommand(bashInput('gh pr create'), {
       root: f.root,
       home: f.home,
     });

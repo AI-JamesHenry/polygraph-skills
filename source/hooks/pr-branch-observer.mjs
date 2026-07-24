@@ -11,9 +11,21 @@
 // silent local no-op: no filesystem writes beyond checking for the marker,
 // and no network calls.
 //
+// Alongside branch identity, this hook also carries the client half of the
+// pushed-branch evidence contract: when the tool call that just ran was a
+// successful, standalone `git push`, it reports `branch_pushed` for the
+// current branch. The server records that as pushed-branch evidence, which
+// is what makes the branch eligible for the remote `background_pr_create`
+// MCP tool without waiting on the GitHub push webhook to arrive. The
+// webhook remains the stronger signal (signature-verified, carries the head
+// SHA) and the server re-verifies the branch against the repository before
+// any PR is created, so this report is workflow eligibility, never a
+// security boundary.
+//
 // The captureHookUrl carried by the marker is secret: it must never be
 // printed, logged, or included in hook output.
 
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -142,6 +154,46 @@ function emptyResult() {
   return { exitCode: 0, stdout: '', stderr: '' };
 }
 
+// A push counts only when it is a single plain `git push` command line: no
+// chaining (`&&`, `||`, `;`), no pipes, no redirection, no backgrounding, no
+// command substitution, and no embedded newline. Anything compound is
+// ambiguous about which command actually pushed, so it is left for the
+// server-side push webhook to record instead.
+const COMPOUND_COMMAND_PATTERN = /[;&|<>`\n]|\$\(/;
+const GIT_PUSH_PATTERN = /^git\s+push(?:\s|$)/;
+
+// Claude Code PostToolUse contract: this hook only fires after a tool call
+// completes successfully (a failing call routes to PostToolUseFailure, which
+// carries no tool_response). Bash's tool_response is {stdout, stderr,
+// interrupted, ...} with no exit-code field; `interrupted` is the one field
+// that can still turn a completed call into "not usable".
+function bashOutputText(response) {
+  if (!response || typeof response !== 'object') return '';
+  const stdout = typeof response.stdout === 'string' ? response.stdout : '';
+  const stderr = typeof response.stderr === 'string' ? response.stderr : '';
+  return stdout + stderr;
+}
+
+// Returns the push's combined output text when the tool call that just ran
+// was a successful, standalone `git push`; null for anything else.
+function classifyGitPush(input) {
+  if (input?.tool_name !== 'Bash') return null;
+  const command = input?.tool_input?.command;
+  if (typeof command !== 'string') return null;
+  const trimmed = command.trim();
+  if (!trimmed || COMPOUND_COMMAND_PATTERN.test(trimmed)) return null;
+  if (!GIT_PUSH_PATTERN.test(trimmed)) return null;
+  const response = input?.tool_response;
+  if (
+    !response ||
+    typeof response !== 'object' ||
+    response.interrupted === true
+  ) {
+    return null;
+  }
+  return bashOutputText(response);
+}
+
 // Report the current branch to `${captureHookUrl}/pr` when it differs from
 // the branch last reported for this provider session. Absolute silence — no
 // filesystem writes beyond the marker check, no network — without an active
@@ -174,43 +226,82 @@ export async function observeBranchIdentity(
   }
   if (!branch) return emptyResult(); // detached HEAD or no repository: no event
 
+  const pushOutputText = classifyGitPush(input);
   const statePath = branchStatePath(providerSessionId, root);
   const previous = readBranchState(statePath);
-  if (previous?.lastReportedBranch === branch) return emptyResult(); // fire-once-per-branch
+  const isNewBranch = previous?.lastReportedBranch !== branch;
+  if (!isNewBranch && pushOutputText === null) return emptyResult(); // fire-once-per-branch
 
-  try {
-    const response = await fetchImpl(`${state.captureHookUrl}/pr`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        providerSessionId,
-        kind: 'branch_active',
-        branch,
-        eventId: `branch:${branch}`,
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) {
-      throw new Error(`Polygraph branch report returned HTTP ${response.status}`);
+  if (isNewBranch) {
+    try {
+      const response = await fetchImpl(`${state.captureHookUrl}/pr`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          providerSessionId,
+          kind: 'branch_active',
+          branch,
+          eventId: `branch:${branch}`,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) {
+        throw new Error(`Polygraph branch report returned HTTP ${response.status}`);
+      }
+    } catch (error) {
+      // stderr only: hook stdout is injected into the model context. The
+      // message never includes the capture capability URL. The persisted
+      // lastReportedBranch is left untouched so the next invocation retries.
+      logHookFailure(
+        'pr-branch-observer:reportBranch',
+        error,
+        { providerSessionId },
+        home
+      );
+      return emptyResult();
     }
-  } catch (error) {
-    // stderr only: hook stdout is injected into the model context. The
-    // message never includes the capture capability URL. The persisted
-    // lastReportedBranch is left untouched so the next invocation retries.
-    logHookFailure(
-      'pr-branch-observer:reportBranch',
-      error,
-      { providerSessionId },
-      home
-    );
-    return emptyResult();
+
+    writeJsonAtomically(statePath, {
+      providerSessionId,
+      lastReportedBranch: branch,
+      updatedAt: Date.now(),
+    });
   }
 
-  writeJsonAtomically(statePath, {
-    providerSessionId,
-    lastReportedBranch: branch,
-    updatedAt: Date.now(),
-  });
+  if (pushOutputText !== null) {
+    // The eventId hashes the push's output so a genuinely repeated push to
+    // the same branch records again (fresh output → fresh id), while a hook
+    // re-fire for the very same push dedupes server-side.
+    const digest = createHash('sha256')
+      .update(pushOutputText)
+      .digest('hex')
+      .slice(0, 16);
+    try {
+      const response = await fetchImpl(`${state.captureHookUrl}/pr`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          providerSessionId,
+          kind: 'branch_pushed',
+          branch,
+          eventId: `push:${branch}:${digest}`,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) {
+        throw new Error(`Polygraph push report returned HTTP ${response.status}`);
+      }
+    } catch (error) {
+      logHookFailure(
+        'pr-branch-observer:reportPush',
+        error,
+        { providerSessionId },
+        home
+      );
+      return emptyResult();
+    }
+  }
+
   return emptyResult();
 }
 

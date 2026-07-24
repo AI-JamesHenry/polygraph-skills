@@ -388,3 +388,187 @@ test('a repository outside any provider marker root never leaks the capture URL 
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// observeBranchIdentity: git push -> branch_pushed
+// ---------------------------------------------------------------------------
+
+function pushInput(repo, command = 'git push -u origin feature/x', extra = {}) {
+  return {
+    session_id: PROVIDER_SESSION_ID,
+    cwd: repo,
+    tool_name: 'Bash',
+    tool_input: { command },
+    tool_response: { stdout: 'To github.com:org/repo.git\n', stderr: '' },
+    ...extra,
+  };
+}
+
+test('a standalone git push reports branch_pushed after the branch_active report', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const posts = [];
+    const result = await observeBranchIdentity(pushInput(repo), {
+      root: f.root,
+      home: f.home,
+      fetchImpl: async (url, request) => {
+        posts.push({ url, body: JSON.parse(request.body) });
+        return { ok: true };
+      },
+    });
+
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].body.kind, 'branch_active');
+    assert.equal(posts[1].body.kind, 'branch_pushed');
+    assert.equal(posts[1].body.branch, 'feature/x');
+    assert.match(posts[1].body.eventId, /^push:feature\/x:[0-9a-f]{16}$/);
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a git push on an already-reported branch still reports branch_pushed', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const posts = [];
+    const fetchImpl = async (url, request) => {
+      posts.push(JSON.parse(request.body));
+      return { ok: true };
+    };
+
+    // First invocation reports the branch; second is the push.
+    await observeBranchIdentity(
+      { session_id: PROVIDER_SESSION_ID, cwd: repo },
+      { root: f.root, home: f.home, fetchImpl }
+    );
+    await observeBranchIdentity(pushInput(repo), {
+      root: f.root,
+      home: f.home,
+      fetchImpl,
+    });
+
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].kind, 'branch_active');
+    assert.equal(posts[1].kind, 'branch_pushed');
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a repeated identical push dedupes by eventId while fresh push output records again', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const posts = [];
+    const fetchImpl = async (url, request) => {
+      posts.push(JSON.parse(request.body));
+      return { ok: true };
+    };
+
+    const sameOutput = {
+      tool_response: { stdout: 'same push output', stderr: '' },
+    };
+    const freshOutput = {
+      tool_response: { stdout: 'different push output', stderr: '' },
+    };
+    await observeBranchIdentity(pushInput(repo, 'git push', sameOutput), {
+      root: f.root,
+      home: f.home,
+      fetchImpl,
+    });
+    await observeBranchIdentity(pushInput(repo, 'git push', sameOutput), {
+      root: f.root,
+      home: f.home,
+      fetchImpl,
+    });
+    await observeBranchIdentity(pushInput(repo, 'git push', freshOutput), {
+      root: f.root,
+      home: f.home,
+      fetchImpl,
+    });
+
+    const pushPosts = posts.filter((post) => post.kind === 'branch_pushed');
+    assert.equal(pushPosts.length, 3);
+    // The hook itself posts every time; dedupe is server-side by eventId, so
+    // identical pushes must carry the identical id and fresh output a new one.
+    assert.equal(pushPosts[0].eventId, pushPosts[1].eventId);
+    assert.notEqual(pushPosts[1].eventId, pushPosts[2].eventId);
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('compound, interrupted, and non-push commands never report branch_pushed', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const posts = [];
+    const fetchImpl = async (url, request) => {
+      posts.push(JSON.parse(request.body));
+      return { ok: true };
+    };
+    const options = { root: f.root, home: f.home, fetchImpl };
+
+    await observeBranchIdentity(
+      pushInput(repo, 'git commit -m x && git push'),
+      options
+    );
+    await observeBranchIdentity(
+      pushInput(repo, 'git push', {
+        tool_response: { stdout: '', stderr: '', interrupted: true },
+      }),
+      options
+    );
+    await observeBranchIdentity(pushInput(repo, 'git pushx origin'), options);
+    await observeBranchIdentity(
+      pushInput(repo, 'echo "git push is fun"'),
+      options
+    );
+
+    assert.equal(posts.filter((post) => post.kind === 'branch_pushed').length, 0);
+    // Only the initial branch_active from the first invocation.
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].kind, 'branch_active');
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a failed branch_pushed report is soft and logged without breaking the hook', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    let calls = 0;
+    const result = await observeBranchIdentity(pushInput(repo), {
+      root: f.root,
+      home: f.home,
+      fetchImpl: async () => {
+        calls += 1;
+        // First call (branch_active) succeeds, second (branch_pushed) fails.
+        if (calls === 1) return { ok: true };
+        throw new Error('network unreachable');
+      },
+    });
+
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: '' });
+    const lines = readFileSync(f.hookLogPath, 'utf8').trim().split('\n');
+    const entry = JSON.parse(lines.at(-1));
+    assert.equal(entry.hook, 'pr-branch-observer:reportPush');
+    assert.match(entry.error, /network unreachable/);
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

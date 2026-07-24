@@ -580,7 +580,7 @@ test('background-session-start renders the four-argument cloud-session contract 
   assert.match(rendered, /--remote-session-id/);
   assert.match(rendered, /same opaque identifier with a `session_` prefix/);
   assert.match(rendered, /Never substitute\s+`CLAUDE_CODE_SESSION_ID`/);
-  assert.match(rendered, /stop and report that the provider\s+session URL is unavailable/);
+  assert.match(rendered, /stop and report that the provider\s+session URL is\s+unavailable/);
 
   // Full response contract validation.
   assert.match(rendered, /`status` equal to `started`/);
@@ -667,35 +667,34 @@ test('Claude plugin hooks preload the inert capture lifecycle helper', () => {
     ]);
   }
 
-  // PostToolUse also carries the PR branch/command observers, in the same
-  // unmatched group, after the lifecycle hook so the marker it maintains is
-  // always current before the observers read it.
+  // PostToolUse also carries the PR branch observer, in the same unmatched
+  // group, after the lifecycle hook so the marker it maintains is always
+  // current before the observer reads it. The command observer that used to
+  // sit alongside it is gone: PR-command handling moved to the PreToolUse
+  // deny-and-redirect hook below.
   const branchObserverCommand =
     'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-branch-observer.mjs';
-  const commandObserverCommand =
-    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-command-observer.mjs';
   assert.deepEqual(hooks.PostToolUse, [
     {
       hooks: [
         { type: 'command', command: lifecycleCommand },
         { type: 'command', command: branchObserverCommand },
-        { type: 'command', command: commandObserverCommand },
       ],
     },
   ]);
 
-  // Draft-PR enforcement is a PreToolUse rewrite/deny hook scoped to exactly
-  // the tool calls that can create a PR, and it is the only script in that
-  // matcher's scope emitting updatedInput.
-  const draftEnforcementCommand =
-    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-draft-enforcement.mjs';
+  // PR-command redirect is a PreToolUse deny hook scoped to exactly the tool
+  // calls that can create, ready, or edit a PR, and it is the only script in
+  // that matcher's scope emitting a permissionDecision.
+  const commandRedirectCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-command-redirect.mjs';
   assert.ok(
     hooks.PreToolUse.some(
       (group) =>
         group.matcher === '^Bash$|^mcp__.*__create_pull_request$' &&
         group.hooks.some(
           (hook) =>
-            hook.type === 'command' && hook.command === draftEnforcementCommand
+            hook.type === 'command' && hook.command === commandRedirectCommand
         )
     )
   );
