@@ -661,11 +661,45 @@ test('Claude plugin hooks preload the inert capture lifecycle helper', () => {
         )
     )
   );
-  for (const eventName of ['UserPromptSubmit', 'PostToolUse', 'Stop']) {
+  for (const eventName of ['UserPromptSubmit', 'Stop']) {
     assert.deepEqual(hooks[eventName], [
       { hooks: [{ type: 'command', command: lifecycleCommand }] },
     ]);
   }
+
+  // PostToolUse also carries the PR branch/command observers, in the same
+  // unmatched group, after the lifecycle hook so the marker it maintains is
+  // always current before the observers read it.
+  const branchObserverCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-branch-observer.mjs';
+  const commandObserverCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-command-observer.mjs';
+  assert.deepEqual(hooks.PostToolUse, [
+    {
+      hooks: [
+        { type: 'command', command: lifecycleCommand },
+        { type: 'command', command: branchObserverCommand },
+        { type: 'command', command: commandObserverCommand },
+      ],
+    },
+  ]);
+
+  // Draft-PR enforcement is a PreToolUse rewrite/deny hook scoped to exactly
+  // the tool calls that can create a PR, and it is the only script in that
+  // matcher's scope emitting updatedInput.
+  const draftEnforcementCommand =
+    'node ${CLAUDE_PLUGIN_ROOT}/hooks/pr-draft-enforcement.mjs';
+  assert.ok(
+    hooks.PreToolUse.some(
+      (group) =>
+        group.matcher === 'Bash|mcp__.*__create_pull_request' &&
+        group.hooks.some(
+          (hook) =>
+            hook.type === 'command' && hook.command === draftEnforcementCommand
+        )
+    )
+  );
+
   // Hooks maintain the sidecar; they never transmit content themselves.
   assert.doesNotMatch(JSON.stringify(hooks), /"type":\s*"http"/);
   assert.doesNotMatch(JSON.stringify(hooks), /background_capture_event/);

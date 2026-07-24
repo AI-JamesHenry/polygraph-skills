@@ -115,8 +115,55 @@ This stops the sidecar and removes the marker and runtime files.
 Uninstalling the plugin removes the hooks; any remaining state can be deleted
 by removing `~/.polygraph/background-capture/`.
 
+## Pull request observation and draft enforcement
+
+Once a session activates capture (see "Opt-in and capture boundary" above),
+three preloaded plugin hooks give Polygraph visibility into PR work without
+requiring the claude.ai "Create PR" button, which is provider-side and has no
+reach into a Polygraph-tracked branch:
+
+- **Branch observation (backbone).** A `PostToolUse` hook resolves the
+  current git branch after every tool call and, on each new branch (fire-once
+  per branch per session), posts `POST {captureHookUrl}/pr` with
+  `kind: "branch_active"`. This is the low-confidence, always-on signal: it
+  needs no `gh` or specific command shape, only a checked-out branch.
+- **In-stream command observation (fast path).** A second `PostToolUse` hook
+  classifies the command that just ran — `gh pr create`, `gh pr ready`,
+  `gh pr edit`, `git push`, or an MCP `create_pull_request` tool call — and,
+  for a single unambiguous invocation (no chaining, piping, redirection, or
+  substitution), posts a richer event: `branch_pushed` for `git push`,
+  `pr_created` for `gh pr create` or the MCP tool, `pr_ready` for
+  `gh pr ready`, `pr_updated` for `gh pr edit`. Anything compound or
+  ambiguous is left alone; the branch-identity backbone still covers it.
+- **Draft enforcement (autonomous creation only).** A `PreToolUse` hook
+  intercepts `gh pr create` and the MCP `create_pull_request` tool before
+  they run. A single unambiguous invocation without an existing draft flag is
+  rewritten in place to add `--draft` (or `draft: true`); a compound or
+  ambiguous `gh pr create` is denied rather than risking a silent
+  misclassification. This only ever tightens an autonomous creation call
+  into draft mode: it never blocks a PR a human already asked for by name,
+  and it does not touch `gh pr ready`, `gh pr edit`, or `git push`.
+
+The capture endpoint's `/pr` route accepts these event kinds:
+
+| Kind            | Meaning                                             |
+| ---------------- | ---------------------------------------------------- |
+| `branch_active`  | The session has a checked-out branch (new or changed) |
+| `branch_pushed`  | `git push` ran on the current branch                 |
+| `pr_created`     | A PR was opened (`gh pr create` or MCP `create_pull_request`) |
+| `pr_ready`       | A draft PR was marked ready (`gh pr ready`)          |
+| `pr_updated`     | An existing PR was edited (`gh pr edit`)             |
+
+All three hooks share the same opt-in boundary as the rest of this preview:
+without the activation marker, each is a silent local no-op — no filesystem
+writes beyond checking for the marker, and no network calls. Nothing here
+changes when capture activates or what it requires; PR observation only adds
+more detail to a session that already opted in. Because the claude.ai
+"Create PR" button is provider-side and cannot be wired into a
+Polygraph-tracked branch directly, Polygraph instead adopts the PR
+server-side over a webhook once the branch has been observed.
+
 ## Not included in this preview
 
-- No pull request association.
 - No Codex or OpenCode cloud-agent capture.
 - No local Polygraph MCP server or Polygraph CLI requirement.
