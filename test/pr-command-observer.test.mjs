@@ -60,24 +60,33 @@ function hashOf(text) {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
-function bashInput({ command, stdout = '', stderr = '', exit_code = 0, cwd }) {
+// Fixture shapes match Claude Code's real PostToolUse `tool_response`
+// contract (decompiled from installed CLI bundles, cross-checked against the
+// hooks docs statement that PostToolUse fires only on tool success): Bash is
+// {stdout, stderr, interrupted, ...} with no exit-code field; an MCP tool's
+// tool_response is an MCP result {content: [{type, text}, ...], isError?}.
+function bashInput({ command, stdout = '', stderr = '', interrupted = false, cwd }) {
   return {
     session_id: PROVIDER_SESSION_ID,
     hook_event_name: 'PostToolUse',
     tool_name: 'Bash',
     tool_input: { command },
-    tool_response: { stdout, stderr, exit_code },
+    tool_response: { stdout, stderr, interrupted },
     cwd,
   };
 }
 
-function mcpInput({ toolName, text, isError = false, cwd }) {
+function mcpInput({ toolName, text, isError = false, cwd, structuredContent }) {
   return {
     session_id: PROVIDER_SESSION_ID,
     hook_event_name: 'PostToolUse',
     tool_name: toolName,
     tool_input: {},
-    tool_response: { text, isError },
+    tool_response: {
+      content: typeof text === 'string' ? [{ type: 'text', text }] : [],
+      isError,
+      ...(structuredContent !== undefined ? { structuredContent } : {}),
+    },
     cwd,
   };
 }
@@ -196,7 +205,7 @@ test('gh pr create success without a URL in output falls back to branch_active',
   }
 });
 
-test('gh pr create failure (non-zero exit) produces no event', async () => {
+test('gh pr create with an interrupted tool_response produces no event', async () => {
   const f = fixture();
   const repo = makeRepo('ref: refs/heads/feature/x\n');
   try {
@@ -205,9 +214,29 @@ test('gh pr create failure (non-zero exit) produces no event', async () => {
       command: 'gh pr create --title "Add feature"',
       stdout: '',
       stderr: 'error: a pull request for branch "feature/x" already exists',
-      exit_code: 1,
+      interrupted: true,
       cwd: repo,
     });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 0);
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a Bash tool call with no tool_response produces no event', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const input = {
+      session_id: PROVIDER_SESSION_ID,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'gh pr create --title "Add feature"' },
+      cwd: repo,
+    };
     const { posts } = await collectPosts(f, input);
     assert.equal(posts.length, 0);
   } finally {
@@ -257,6 +286,27 @@ test('gh pr ready without a URL falls back to prNumber from the first positional
       prNumber: 42,
       branch: 'feature/x',
       eventId: `pr_ready:feature/x:${hashOf(stdout)}`,
+    });
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('gh pr ready with a resolvable prNumber but no resolvable branch uses the prNumber as the eventId identity', async () => {
+  const f = fixture();
+  const repo = makeRepo(`${DETACHED_HEAD_SHA}\n`);
+  try {
+    await activate(f);
+    const stdout = '\n';
+    const input = bashInput({ command: 'gh pr ready 42', stdout, cwd: repo });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0].body, {
+      providerSessionId: PROVIDER_SESSION_ID,
+      kind: 'pr_ready',
+      prNumber: 42,
+      eventId: `pr_ready:pr#42:${hashOf(stdout)}`,
     });
   } finally {
     f.cleanup();
@@ -342,7 +392,7 @@ test('git push success reports branch_pushed with the current branch', async () 
   }
 });
 
-test('git push failure (non-zero exit) produces no event', async () => {
+test('git push with an interrupted tool_response produces no event', async () => {
   const f = fixture();
   const repo = makeRepo('ref: refs/heads/feature/x\n');
   try {
@@ -350,7 +400,7 @@ test('git push failure (non-zero exit) produces no event', async () => {
     const input = bashInput({
       command: 'git push',
       stderr: 'error: failed to push some refs',
-      exit_code: 1,
+      interrupted: true,
       cwd: repo,
     });
     const { posts } = await collectPosts(f, input);
@@ -529,6 +579,26 @@ test('an MCP create_pull_request tool call that errored produces no event', asyn
       isError: true,
       cwd: repo,
     });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 0);
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('an MCP tool call with no tool_response produces no event', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const input = {
+      session_id: PROVIDER_SESSION_ID,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'mcp__github__create_pull_request',
+      tool_input: {},
+      cwd: repo,
+    };
     const { posts } = await collectPosts(f, input);
     assert.equal(posts.length, 0);
   } finally {

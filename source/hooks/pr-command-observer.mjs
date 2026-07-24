@@ -117,6 +117,12 @@ function firstPositionalArgAfter(command, skipTokenCount) {
   return null;
 }
 
+// Claude Code PostToolUse contract: this hook only fires after a tool call
+// completes successfully (a failing call throws internally and routes to
+// PostToolUseFailure instead, which carries no tool_response). Bash's
+// tool_response is {stdout, stderr, interrupted, ...} with no exit-code
+// field; an MCP tool's tool_response is an MCP result:
+// {content: [{type, text}, ...], isError?, structuredContent?}.
 function bashOutputText(response) {
   if (!response || typeof response !== 'object') return '';
   const stdout = typeof response.stdout === 'string' ? response.stdout : '';
@@ -126,7 +132,18 @@ function bashOutputText(response) {
 
 function mcpOutputText(response) {
   if (!response || typeof response !== 'object') return '';
-  return typeof response.text === 'string' ? response.text : '';
+  const content = Array.isArray(response.content) ? response.content : [];
+  const textParts = content
+    .filter((block) => block && typeof block.text === 'string')
+    .map((block) => block.text);
+  if (response.structuredContent !== undefined) {
+    try {
+      textParts.push(JSON.stringify(response.structuredContent));
+    } catch {
+      // circular or otherwise unserializable — ignore
+    }
+  }
+  return textParts.join('\n');
 }
 
 // Resolve a PR-lifecycle command to prUrl/prNumber/branch-fallback, in that
@@ -148,10 +165,13 @@ function classifyBash(input) {
   const trimmed = command.trim();
   if (!trimmed || COMPOUND_COMMAND_PATTERN.test(trimmed)) return null;
 
+  // Reaching PostToolUse for Bash already means the command succeeded (see
+  // the contract note above `bashOutputText`); `interrupted` is the one real
+  // field left that can still turn a completed call into "not usable".
   const response = input?.tool_response;
-  const succeeded =
-    response && typeof response === 'object' && response.exit_code === 0;
-  if (!succeeded) return null;
+  if (!response || typeof response !== 'object' || response.interrupted === true) {
+    return null;
+  }
 
   const outputText = bashOutputText(response);
 
@@ -187,7 +207,9 @@ function classifyMcp(input) {
     return null;
   }
   const response = input?.tool_response;
-  if (response?.isError === true) return null;
+  if (!response || typeof response !== 'object' || response.isError === true) {
+    return null;
+  }
 
   const outputText = mcpOutputText(response);
   const prUrl = extractPrUrl(outputText);
@@ -255,7 +277,15 @@ export async function observePrCommand(
     .update(classification.outputText ?? '')
     .digest('hex')
     .slice(0, 16);
-  payload.eventId = `${classification.kind}:${classification.prUrl ?? branch ?? 'unknown'}:${outputHash}`;
+  // Identity segment, in priority order: prUrl, branch, prNumber (so a
+  // prNumber-only classification with no resolvable branch — e.g. detached
+  // HEAD — still distinguishes itself from other such events instead of
+  // collapsing to the literal 'unknown'), then 'unknown' as the last resort.
+  const eventIdentity =
+    classification.prUrl ??
+    branch ??
+    (classification.prNumber ? `pr#${classification.prNumber}` : 'unknown');
+  payload.eventId = `${classification.kind}:${eventIdentity}:${outputHash}`;
 
   try {
     const response = await fetchImpl(`${state.captureHookUrl}/pr`, {
