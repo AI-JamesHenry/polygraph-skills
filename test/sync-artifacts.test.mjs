@@ -692,7 +692,7 @@ test('Claude plugin hooks preload the inert capture lifecycle helper', () => {
   assert.ok(
     hooks.PreToolUse.some(
       (group) =>
-        group.matcher === 'Bash|mcp__.*__create_pull_request' &&
+        group.matcher === '^Bash$|^mcp__.*__create_pull_request$' &&
         group.hooks.some(
           (hook) =>
             hook.type === 'command' && hook.command === draftEnforcementCommand
