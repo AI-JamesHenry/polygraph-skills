@@ -380,7 +380,7 @@ export function deactivateBackgroundCapture(
   rmSync(markerPath(providerSessionId, root), { force: true });
 }
 
-function readBackgroundCapture(providerSessionId, root = defaultRoot()) {
+export function readBackgroundCapture(providerSessionId, root = defaultRoot()) {
   let path;
   try {
     path = markerPath(providerSessionId, root);
