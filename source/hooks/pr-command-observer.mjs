@@ -86,14 +86,18 @@ function logHookFailure(
 // flag values (e.g. `--title "Add feature"`) are still simple. Anything else
 // is compound or ambiguous, and is left for the branch-identity backbone to
 // pick up instead of risking a misclassification.
-const COMPOUND_COMMAND_PATTERN = /[;&|<>`\n]|\$\(/;
+//
+// Exported so the PreToolUse draft-enforcement hook (pr-draft-enforcement.mjs)
+// can reuse the exact same "simple invocation" rules rather than duplicating
+// them with the risk of the two hooks silently drifting apart.
+export const COMPOUND_COMMAND_PATTERN = /[;&|<>`\n]|\$\(/;
 
-const GH_PR_CREATE_PATTERN = /^gh\s+pr\s+create(?:\s|$)/;
+export const GH_PR_CREATE_PATTERN = /^gh\s+pr\s+create(?:\s|$)/;
 const GH_PR_READY_PATTERN = /^gh\s+pr\s+ready(?:\s|$)/;
 const GH_PR_EDIT_PATTERN = /^gh\s+pr\s+edit(?:\s|$)/;
 const GIT_PUSH_PATTERN = /^git\s+push(?:\s|$)/;
 
-const MCP_CREATE_PULL_REQUEST_PATTERN = /^mcp__.*__create_pull_request$/;
+export const MCP_CREATE_PULL_REQUEST_PATTERN = /^mcp__.*__create_pull_request$/;
 
 const PR_URL_PATTERN = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/;
 
