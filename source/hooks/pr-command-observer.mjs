@@ -121,8 +121,20 @@ function firstPositionalArgAfter(command, skipTokenCount) {
 // completes successfully (a failing call throws internally and routes to
 // PostToolUseFailure instead, which carries no tool_response). Bash's
 // tool_response is {stdout, stderr, interrupted, ...} with no exit-code
-// field; an MCP tool's tool_response is an MCP result:
-// {content: [{type, text}, ...], isError?, structuredContent?}.
+// field. An MCP tool's tool_response is the bare content itself, verified by
+// tracing Claude Code's MCP call pipeline (y32 -> jY5 -> b10) end to end: the
+// wrapper object jY5 receives ({content, isError, structuredContent}) is
+// destructured down to its `content` field before that value ever becomes
+// `tool_response`, and the shared result renderer
+// (mapToolResultToToolResultBlockParam) assigns that same value directly as
+// the API's `content` field — which only makes sense if it already *is* the
+// content, not an object with a nested `.content` property. So a real,
+// successful MCP tool_response is either a bare array of content blocks
+// ([{type, text}, ...]) or a bare string. There is no `.isError` to check on
+// that shape at all, since a failed call never reaches PostToolUse in the
+// first place. An object-wrapped {content, isError?} form is still accepted
+// here for forward-compat tolerance only (some harness versions may wrap it)
+// — never assume that shape is the real contract.
 function bashOutputText(response) {
   if (!response || typeof response !== 'object') return '';
   const stdout = typeof response.stdout === 'string' ? response.stdout : '';
@@ -130,20 +142,45 @@ function bashOutputText(response) {
   return stdout + stderr;
 }
 
+function mcpContentBlocksText(blocks) {
+  return blocks
+    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n');
+}
+
+// Accepts, in order: a bare string; a bare array of content blocks; or (for
+// forward-compat tolerance only) an object wrapping either shape in a
+// `.content` property. Anything else is ambiguous and yields no text.
 function mcpOutputText(response) {
-  if (!response || typeof response !== 'object') return '';
-  const content = Array.isArray(response.content) ? response.content : [];
-  const textParts = content
-    .filter((block) => block && typeof block.text === 'string')
-    .map((block) => block.text);
-  if (response.structuredContent !== undefined) {
-    try {
-      textParts.push(JSON.stringify(response.structuredContent));
-    } catch {
-      // circular or otherwise unserializable — ignore
-    }
+  if (typeof response === 'string') return response;
+  if (Array.isArray(response)) return mcpContentBlocksText(response);
+  if (
+    response &&
+    typeof response === 'object' &&
+    (typeof response.content === 'string' || Array.isArray(response.content))
+  ) {
+    return mcpOutputText(response.content);
   }
-  return textParts.join('\n');
+  return '';
+}
+
+// A recognized MCP success shape is a bare string, a bare array (neither of
+// which carries an isError field — its absence must not block the event), or
+// — tolerated for forward-compat only — an object wrapping `.content` in
+// that shape, where `isError === true` suppresses the event. Any other shape
+// is ambiguous and resolves to silence.
+function isRecognizedMcpResponse(response) {
+  if (typeof response === 'string') return true;
+  if (Array.isArray(response)) return true;
+  if (
+    response &&
+    typeof response === 'object' &&
+    (typeof response.content === 'string' || Array.isArray(response.content))
+  ) {
+    return response.isError !== true;
+  }
+  return false;
 }
 
 // Resolve a PR-lifecycle command to prUrl/prNumber/branch-fallback, in that
@@ -207,9 +244,7 @@ function classifyMcp(input) {
     return null;
   }
   const response = input?.tool_response;
-  if (!response || typeof response !== 'object' || response.isError === true) {
-    return null;
-  }
+  if (!isRecognizedMcpResponse(response)) return null;
 
   const outputText = mcpOutputText(response);
   const prUrl = extractPrUrl(outputText);

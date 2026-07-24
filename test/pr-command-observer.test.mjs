@@ -64,7 +64,12 @@ function hashOf(text) {
 // contract (decompiled from installed CLI bundles, cross-checked against the
 // hooks docs statement that PostToolUse fires only on tool success): Bash is
 // {stdout, stderr, interrupted, ...} with no exit-code field; an MCP tool's
-// tool_response is an MCP result {content: [{type, text}, ...], isError?}.
+// tool_response is the bare content itself — an array of content blocks
+// ([{type, text}, ...]) or a bare string, never an object with a nested
+// `.content` property. There is no `.isError` field on that bare shape at
+// all (a failed call never reaches PostToolUse). `mcpWrappedInput` builds the
+// object-wrapped {content, isError?} shape, used only to exercise the
+// forward-compat tolerance path — not the verified real contract.
 function bashInput({ command, stdout = '', stderr = '', interrupted = false, cwd }) {
   return {
     session_id: PROVIDER_SESSION_ID,
@@ -76,7 +81,35 @@ function bashInput({ command, stdout = '', stderr = '', interrupted = false, cwd
   };
 }
 
-function mcpInput({ toolName, text, isError = false, cwd, structuredContent }) {
+// Bare array of content blocks — the real, verified MCP tool_response shape.
+function mcpInput({ toolName, blocks, text, cwd }) {
+  const content = blocks ?? (typeof text === 'string' ? [{ type: 'text', text }] : []);
+  return {
+    session_id: PROVIDER_SESSION_ID,
+    hook_event_name: 'PostToolUse',
+    tool_name: toolName,
+    tool_input: {},
+    tool_response: content,
+    cwd,
+  };
+}
+
+// Bare string — the other real, verified MCP tool_response shape.
+function mcpStringInput({ toolName, text, cwd }) {
+  return {
+    session_id: PROVIDER_SESSION_ID,
+    hook_event_name: 'PostToolUse',
+    tool_name: toolName,
+    tool_input: {},
+    tool_response: text,
+    cwd,
+  };
+}
+
+// Object-wrapped {content, isError?} — NOT the verified real contract;
+// exercises only the forward-compat tolerance path some harness versions may
+// need.
+function mcpWrappedInput({ toolName, text, isError = false, cwd }) {
   return {
     session_id: PROVIDER_SESSION_ID,
     hook_event_name: 'PostToolUse',
@@ -85,7 +118,6 @@ function mcpInput({ toolName, text, isError = false, cwd, structuredContent }) {
     tool_response: {
       content: typeof text === 'string' ? [{ type: 'text', text }] : [],
       isError,
-      ...(structuredContent !== undefined ? { structuredContent } : {}),
     },
     cwd,
   };
@@ -521,7 +553,7 @@ test('a non-Bash, non-matching-MCP tool produces no event', async () => {
 // MCP create_pull_request tools
 // ---------------------------------------------------------------------------
 
-test('an MCP create_pull_request tool with a URL in the response reports pr_created', async () => {
+test('an MCP create_pull_request tool with a bare array response and a URL in a text block reports pr_created', async () => {
   const f = fixture();
   const repo = makeRepo('ref: refs/heads/feature/x\n');
   try {
@@ -541,6 +573,78 @@ test('an MCP create_pull_request tool with a URL in the response reports pr_crea
       branch: 'feature/x',
       eventId: `pr_created:https://github.com/nrwl/ocean/pull/99:${hashOf(text)}`,
     });
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('an MCP create_pull_request tool with a bare string response reports pr_created', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const text = 'Created https://github.com/nrwl/ocean/pull/100';
+    const input = mcpStringInput({
+      toolName: 'mcp__github__create_pull_request',
+      text,
+      cwd: repo,
+    });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0].body, {
+      providerSessionId: PROVIDER_SESSION_ID,
+      kind: 'pr_created',
+      prUrl: 'https://github.com/nrwl/ocean/pull/100',
+      branch: 'feature/x',
+      eventId: `pr_created:https://github.com/nrwl/ocean/pull/100:${hashOf(text)}`,
+    });
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a bare array response with non-text blocks ignores those blocks', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const blocks = [
+      { type: 'image', data: 'irrelevant-base64' },
+      { type: 'text', text: 'Created https://github.com/nrwl/ocean/pull/101' },
+    ];
+    const input = mcpInput({
+      toolName: 'mcp__github__create_pull_request',
+      blocks,
+      cwd: repo,
+    });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.kind, 'pr_created');
+    assert.equal(posts[0].body.prUrl, 'https://github.com/nrwl/ocean/pull/101');
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a bare array response with no isError field still reports an event', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const text = 'Pull request created';
+    const input = mcpInput({
+      toolName: 'mcp__polygraph_polygraph-mcp__create_pull_request',
+      text,
+      cwd: repo,
+    });
+    assert.equal(Object.hasOwn(input.tool_response, 'isError'), false);
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.kind, 'branch_active');
+    assert.equal(posts[0].body.branch, 'feature/x');
   } finally {
     f.cleanup();
     rmSync(repo, { recursive: true, force: true });
@@ -568,12 +672,34 @@ test('an MCP create_pull_request tool without a URL falls back to branch_active'
   }
 });
 
-test('an MCP create_pull_request tool call that errored produces no event', async () => {
+test('an MCP create_pull_request tool with an object-wrapped {content, isError: false} response is tolerated', async () => {
   const f = fixture();
   const repo = makeRepo('ref: refs/heads/feature/x\n');
   try {
     await activate(f);
-    const input = mcpInput({
+    const text = 'Created https://github.com/nrwl/ocean/pull/102';
+    const input = mcpWrappedInput({
+      toolName: 'mcp__github__create_pull_request',
+      text,
+      isError: false,
+      cwd: repo,
+    });
+    const { posts } = await collectPosts(f, input);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.kind, 'pr_created');
+    assert.equal(posts[0].body.prUrl, 'https://github.com/nrwl/ocean/pull/102');
+  } finally {
+    f.cleanup();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('an MCP create_pull_request tool call that errored (object-wrapped isError: true) produces no event', async () => {
+  const f = fixture();
+  const repo = makeRepo('ref: refs/heads/feature/x\n');
+  try {
+    await activate(f);
+    const input = mcpWrappedInput({
       toolName: 'mcp__github__create_pull_request',
       text: 'permission denied',
       isError: true,
