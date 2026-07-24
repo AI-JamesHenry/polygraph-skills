@@ -17,7 +17,7 @@ const PROVIDER_SESSION_ID = '88b2ff2e-b146-458c-85fc-109c7bc12f26';
 const CAPTURE_HOOK_URL =
   'https://polygraph.example.test/hooks/capture/pch_abcdefghijklmnopqrstuvwxyz123456';
 const DENY_REASON =
-  'Polygraph cloud sessions create draft PRs. Re-run this command with --draft added to gh pr create.';
+  'Polygraph cloud sessions create draft PRs. Re-run gh pr create as a single stand-alone command (no shell operators) with --draft.';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'polygraph-draft-enforcement-'));

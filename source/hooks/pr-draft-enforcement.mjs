@@ -40,7 +40,7 @@ import { MCP_CREATE_PULL_REQUEST_PATTERN } from './pr-command-observer.mjs';
 const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 const DRAFT_ENFORCEMENT_DENY_REASON =
-  'Polygraph cloud sessions create draft PRs. Re-run this command with --draft added to gh pr create.';
+  'Polygraph cloud sessions create draft PRs. Re-run gh pr create as a single stand-alone command (no shell operators) with --draft.';
 
 // Characters that end a "simple" command when they appear outside all
 // quoting: chaining (`;`, and `&`/`|`, which also covers `&&`/`||` since

@@ -123,10 +123,13 @@ requiring the claude.ai "Create PR" button, which is provider-side and has no
 reach into a Polygraph-tracked branch:
 
 - **Branch observation (backbone).** A `PostToolUse` hook resolves the
-  current git branch after every tool call and, on each new branch (fire-once
-  per branch per session), posts `POST {captureHookUrl}/pr` with
-  `kind: "branch_active"`. This is the low-confidence, always-on signal: it
-  needs no `gh` or specific command shape, only a checked-out branch.
+  current git branch after every tool call and, whenever the checked-out
+  branch differs from the last one it reported (fire-on-change, not
+  fire-once: switching `A` -> `B` -> `A` reports `branch_active` for `A`
+  again), posts `POST {captureHookUrl}/pr` with `kind: "branch_active"`. The
+  server dedupes by `eventId`, so a repeat report for the same branch is a
+  no-op. This is the low-confidence, always-on signal: it needs no `gh` or
+  specific command shape, only a checked-out branch.
 - **In-stream command observation (fast path).** A second `PostToolUse` hook
   classifies the command that just ran — `gh pr create`, `gh pr ready`,
   `gh pr edit`, `git push`, or an MCP `create_pull_request` tool call — and,
@@ -137,12 +140,13 @@ reach into a Polygraph-tracked branch:
   ambiguous is left alone; the branch-identity backbone still covers it.
 - **Draft enforcement (autonomous creation only).** A `PreToolUse` hook
   intercepts `gh pr create` and the MCP `create_pull_request` tool before
-  they run. A single unambiguous invocation without an existing draft flag is
-  rewritten in place to add `--draft` (or `draft: true`); a compound or
-  ambiguous `gh pr create` is denied rather than risking a silent
-  misclassification. This only ever tightens an autonomous creation call
-  into draft mode: it never blocks a PR a human already asked for by name,
-  and it does not touch `gh pr ready`, `gh pr edit`, or `git push`.
+  they run. A single, standalone invocation without an existing draft flag is
+  rewritten in place to add `--draft` (or `draft: true`) and allowed to
+  proceed. A compound invocation (chained, piped, redirected, or otherwise
+  ambiguous) or one that explicitly requests non-draft (`--draft=false`) is
+  denied, with a reason telling the agent how to re-run it as a draft,
+  rather than risking a silent misclassification. It does not touch
+  `gh pr ready`, `gh pr edit`, or `git push`.
 
 The capture endpoint's `/pr` route accepts these event kinds:
 

@@ -87,12 +87,17 @@ function logHookFailure(
 // is compound or ambiguous, and is left for the branch-identity backbone to
 // pick up instead of risking a misclassification.
 //
-// Exported so the PreToolUse draft-enforcement hook (pr-draft-enforcement.mjs)
-// can reuse the exact same "simple invocation" rules rather than duplicating
-// them with the risk of the two hooks silently drifting apart.
-export const COMPOUND_COMMAND_PATTERN = /[;&|<>`\n]|\$\(/;
+// The PreToolUse draft-enforcement hook (pr-draft-enforcement.mjs) does NOT
+// reuse this pattern: it deliberately implements its own, stricter
+// quote-aware scanner (scanQuotedRegions + OPERATOR_OUTSIDE_QUOTES_PATTERN)
+// because it needs to distinguish an operator inside a quoted flag value
+// from a real compound command, something this quote-insensitive pattern
+// cannot do. Only MCP_CREATE_PULL_REQUEST_PATTERN below is shared between
+// the two hooks; keep that in mind before "unifying" either classifier to
+// match the other.
+const COMPOUND_COMMAND_PATTERN = /[;&|<>`\n]|\$\(/;
 
-export const GH_PR_CREATE_PATTERN = /^gh\s+pr\s+create(?:\s|$)/;
+const GH_PR_CREATE_PATTERN = /^gh\s+pr\s+create(?:\s|$)/;
 const GH_PR_READY_PATTERN = /^gh\s+pr\s+ready(?:\s|$)/;
 const GH_PR_EDIT_PATTERN = /^gh\s+pr\s+edit(?:\s|$)/;
 const GIT_PUSH_PATTERN = /^git\s+push(?:\s|$)/;
