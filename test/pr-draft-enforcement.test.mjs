@@ -327,6 +327,201 @@ test('a non-string tool_input.command produces no output', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bash: quoted flag-lookalikes and operators (fail-closed round 1)
+// ---------------------------------------------------------------------------
+
+test('a quoted --draft lookalike in --title is not mistaken for the real flag, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title "add --draft support"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: 'gh pr create --draft --title "add --draft support"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a quoted -d lookalike in --body is not mistaken for the real flag, and gets rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --body "we use the -d flag by convention"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command:
+        'gh pr create --draft --body "we use the -d flag by convention"',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a quoted && inside --body is not treated as a compound operator, and gets rewritten with quoting intact byte-for-byte', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --body "a && b"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, { command: 'gh pr create --draft --body "a && b"' });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a $( ) command substitution inside double quotes still executes there, so it is denied', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --body "run $(x)"';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    denyOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an unbalanced quote is ambiguous and denied rather than silently passed through', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'gh pr create --title "unterminated';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    denyOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Bash: non-anchored (prefixed) simple invocations (fail-closed round 1)
+// ---------------------------------------------------------------------------
+
+test('an inline env-var-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'GH_TOKEN=x gh pr create --title x';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, {
+      command: 'GH_TOKEN=x gh pr create --draft --title x',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a `time`-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'time gh pr create --title x';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, { command: 'time gh pr create --draft --title x' });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a `sudo`-prefixed gh pr create is rewritten with the prefix preserved', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const command = 'sudo gh pr create --title x';
+    const result = await enforceDraftPr(bashInput(command), {
+      root: f.root,
+      home: f.home,
+    });
+    allowOutput(result, { command: 'sudo gh pr create --draft --title x' });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('ghe pr create (not the real gh binary) does not match and produces no output', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await enforceDraftPr(
+      bashInput('ghe pr create --title x'),
+      { root: f.root, home: f.home }
+    );
+    noOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('gh prx create (not the real subcommand) does not match and produces no output', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await enforceDraftPr(
+      bashInput('gh prx create --title x'),
+      { root: f.root, home: f.home }
+    );
+    noOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Bash: --draft=<value> (fail-closed round 1)
+// ---------------------------------------------------------------------------
+
+test('--draft=false is ambiguous intent and is denied, not rewritten', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await enforceDraftPr(
+      bashInput('gh pr create --title x --draft=false'),
+      { root: f.root, home: f.home }
+    );
+    denyOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--draft=true already counts as draft and passes through untouched', async () => {
+  const f = fixture();
+  try {
+    await activate(f);
+    const result = await enforceDraftPr(
+      bashInput('gh pr create --title x --draft=true'),
+      { root: f.root, home: f.home }
+    );
+    noOutput(result);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // MCP create_pull_request tools
 // ---------------------------------------------------------------------------
 

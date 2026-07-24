@@ -35,30 +35,95 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readBackgroundCapture } from './background-capture-lifecycle.mjs';
-import {
-  COMPOUND_COMMAND_PATTERN,
-  GH_PR_CREATE_PATTERN,
-  MCP_CREATE_PULL_REQUEST_PATTERN,
-} from './pr-command-observer.mjs';
+import { MCP_CREATE_PULL_REQUEST_PATTERN } from './pr-command-observer.mjs';
 
 const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 const DRAFT_ENFORCEMENT_DENY_REASON =
   'Polygraph cloud sessions create draft PRs. Re-run this command with --draft added to gh pr create.';
 
-// Broader than GH_PR_CREATE_PATTERN: matches `gh pr create` anywhere in the
-// command (not just anchored at the start), so a compound command that
-// *hides* a `gh pr create` after a `&&`/`;`/etc. is still recognized as
-// carrying one — and therefore denied rather than silently ignored.
+// Characters that end a "simple" command when they appear outside all
+// quoting: chaining (`;`, and `&`/`|`, which also covers `&&`/`||` since
+// each is a repeat of a single such character), redirection (`<`, `>`), and
+// an embedded newline. Backtick/`$(` command substitution is deliberately
+// NOT in this set — unlike these operators, it still executes inside double
+// quotes, so it needs quote-type-sensitive handling and is tracked
+// separately by scanQuotedRegions's `hasSubstitution` flag instead.
+const OPERATOR_OUTSIDE_QUOTES_PATTERN = /[;&|<>\n]/;
+
+// `gh pr create` as a literal, whitespace-separated token sequence, matched
+// anywhere in the command (not anchored at the start). Non-anchored so a
+// command prefixed by an env-var assignment (`GH_TOKEN=x gh pr create`) or
+// another command (`time gh pr create`, `sudo gh pr create`) is still
+// recognized as carrying a real invocation, and so is one hidden after a
+// compound operator (`cd repo && gh pr create`) — in that case it is denied
+// rather than silently ignored. Word-bounded on both ends so `ghe pr
+// create` and `gh prx create` do not match.
 const GH_PR_CREATE_ANYWHERE_PATTERN = /\bgh\s+pr\s+create\b/;
 
-// `--draft` or `-d` as a standalone token (surrounded by whitespace or the
-// command boundary). A heuristic, like the rest of this plugin's command
-// classification: a flag value that happens to contain the literal text
-// `-d` inside its own quoting is not distinguished from a real flag. That
-// tradeoff mirrors pr-command-observer.mjs's "simple invocation" heuristics
-// rather than implementing a full shell tokenizer.
-const DRAFT_FLAG_PATTERN = /(?:^|\s)(?:--draft|-d)(?:\s|$)/;
+// `--draft` or `-d` as a standalone token (bare, no `=value`), surrounded by
+// whitespace or the command boundary. Runs only against the quote-blanked
+// command (see scanQuotedRegions) so a flag-lookalike sitting inside a
+// quoted `--title`/`--body` value is never mistaken for the real flag.
+const DRAFT_BARE_FLAG_PATTERN = /(?:^|\s)(?:--draft|-d)(?:\s|$)/;
+
+// `--draft=true` specifically counts as already-draft, same as the bare
+// flag.
+const DRAFT_TRUE_VALUE_PATTERN = /(?:^|\s)--draft=true(?:\s|$)/;
+
+// `--draft=<anything else>` (most notably `--draft=false`). gh's flag
+// parser resolves repeated `--draft` occurrences to the last one, so
+// splicing a second bare `--draft` in front of this would not reliably
+// force draft mode — the intent is ambiguous, so it is denied rather than
+// rewritten.
+const DRAFT_ANY_VALUE_PATTERN = /(?:^|\s)--draft=\S*/;
+
+// Walk `command` tracking single/double-quote state — a small quote-aware
+// scanner, not a full shell tokenizer. Returns:
+//   - blanked: same length as `command`, with the *contents* of quoted
+//     spans replaced by spaces (the quote characters themselves stay in
+//     place). Flag and compound-operator detection run against this string,
+//     so a flag-lookalike or operator character sitting inside a quoted
+//     value can never be mistaken for the real thing. Because it is the
+//     same length as `command`, a match index found in `blanked` is also
+//     the correct index into `command`.
+//   - unbalanced: true if a quote was opened and never closed.
+//   - hasSubstitution: true if a backtick or `$(` appears outside all
+//     quotes, or inside a double-quoted span (the shell still executes it
+//     there) — but not inside a single-quoted span (the shell never does).
+function scanQuotedRegions(command) {
+  let blanked = '';
+  let quote = null;
+  let hasSubstitution = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+        blanked += ch;
+        continue;
+      }
+      if (
+        quote === '"' &&
+        (ch === '`' || (ch === '$' && command[i + 1] === '('))
+      ) {
+        hasSubstitution = true;
+      }
+      blanked += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      blanked += ch;
+      continue;
+    }
+    if (ch === '`' || (ch === '$' && command[i + 1] === '(')) {
+      hasSubstitution = true;
+    }
+    blanked += ch;
+  }
+  return { blanked, unbalanced: quote !== null, hasSubstitution };
+}
 
 function defaultRoot() {
   return join(homedir(), '.polygraph');
@@ -136,41 +201,67 @@ function denyResult(reason) {
   };
 }
 
-// Insert ` --draft` immediately after the `create` token. This is a plain
-// string splice at the end of the `^gh\s+pr\s+create` match, not a
-// tokenize-and-reassemble — so everything after `create` (flags, quoted flag
-// values, internal whitespace) survives byte-for-byte.
-function withDraftFlagAppended(trimmedCommand) {
-  const match = /^gh\s+pr\s+create/.exec(trimmedCommand);
-  const insertAt = match.index + match[0].length;
+// Insert ` --draft` at `insertAt` — the index right after the matched `gh pr
+// create` token's `create`, computed against the same-length blanked string
+// (see scanQuotedRegions) so it lines up exactly with `trimmedCommand`. A
+// plain string splice, not a tokenize-and-reassemble, so everything else in
+// `trimmedCommand` — a prefix before the match, flags, quoted flag values,
+// internal whitespace — survives byte-for-byte.
+function spliceInDraftFlag(trimmedCommand, insertAt) {
   return `${trimmedCommand.slice(0, insertAt)} --draft${trimmedCommand.slice(insertAt)}`;
 }
 
 // Classify a Bash tool_input.command against the `gh pr create` draft
-// enforcement rules. Returns:
-//   - null: no `gh pr create` involved at all (unrelated command, or a
-//     compound command that doesn't carry one) — no opinion.
-//   - { decision: 'allow', command }: a single simple `gh pr create` lacking
-//     --draft/-d, rewritten with --draft appended.
-//   - { decision: 'deny' }: a `gh pr create` invocation that is compound or
-//     otherwise ambiguous.
-//   - null (already-draft case folds into the caller): a single simple
-//     `gh pr create` that already carries --draft/-d needs no rewrite.
+// enforcement rules. Fails closed: any command carrying a `gh pr create`
+// token sequence resolves to either a confident rewrite or a deny, never
+// silence. Returns:
+//   - null: no opinion, for either of two cases the caller treats
+//     identically (both map to emptyResult()) — no `gh pr create` token
+//     sequence is present anywhere in the command, or one is present but
+//     already carries a draft flag (bare `--draft`, `--draft=true`, or `-d`)
+//     and needs no rewrite.
+//   - { decision: 'allow', command }: a single, unambiguous `gh pr create`
+//     invocation lacking a draft flag, rewritten with `--draft` spliced in
+//     right after that invocation's `create` token.
+//   - { decision: 'deny' }: a `gh pr create` invocation this classifier
+//     cannot confidently rewrite — compound/piped/redirected/substituted,
+//     unbalanced quoting, or an ambiguous `--draft=<value>` other than
+//     `true`.
 function classifyGhPrCreateCommand(command) {
   if (typeof command !== 'string') return null;
   const trimmed = command.trim();
   if (!trimmed) return null;
 
-  const isCompound = COMPOUND_COMMAND_PATTERN.test(trimmed);
-  const carriesGhPrCreate = GH_PR_CREATE_ANYWHERE_PATTERN.test(trimmed);
+  const { blanked, unbalanced, hasSubstitution } = scanQuotedRegions(trimmed);
+
+  // Unbalanced quoting means the blanked scan itself can't be trusted (an
+  // unterminated quote swallows the rest of the command as "inside a
+  // quote"), so detection here falls back to the raw command. Ambiguity —
+  // whether it might carry a `gh pr create` — is denied rather than risking
+  // a misplaced rewrite or a silent pass-through.
+  if (unbalanced) {
+    return GH_PR_CREATE_ANYWHERE_PATTERN.test(trimmed)
+      ? { decision: 'deny' }
+      : null;
+  }
+
+  const isCompound =
+    OPERATOR_OUTSIDE_QUOTES_PATTERN.test(blanked) || hasSubstitution;
+  const match = GH_PR_CREATE_ANYWHERE_PATTERN.exec(blanked);
 
   if (isCompound) {
-    return carriesGhPrCreate ? { decision: 'deny' } : null;
+    return match ? { decision: 'deny' } : null;
   }
-  if (!GH_PR_CREATE_PATTERN.test(trimmed)) return null;
-  if (DRAFT_FLAG_PATTERN.test(trimmed)) return null;
+  if (!match) return null;
 
-  return { decision: 'allow', command: withDraftFlagAppended(trimmed) };
+  if (DRAFT_TRUE_VALUE_PATTERN.test(blanked)) return null;
+  if (DRAFT_ANY_VALUE_PATTERN.test(blanked)) return { decision: 'deny' };
+  if (DRAFT_BARE_FLAG_PATTERN.test(blanked)) return null;
+
+  return {
+    decision: 'allow',
+    command: spliceInDraftFlag(trimmed, match.index + match[0].length),
+  };
 }
 
 function classifyMcpCreatePullRequestInput(toolInput) {
