@@ -127,9 +127,11 @@ already has one open. None of that validation lives in the plugin — the
 plugin has no way to check session ownership, repo access, or branch
 provenance, and does not try to.
 
-Marking a PR ready for review, and editing an existing PR's title, body, or
-base branch, are human actions taken from the Polygraph session page in the
-web UI. An autonomous cloud session does not do either on its own.
+Marking the session's own draft ready for review goes through the remote
+`background_pr_ready` MCP tool, validated the same way: only a PR already
+registered to the session in its repository, and the only transition is
+draft to ready. Editing an existing PR's title, body, or base branch stays a
+human action taken from the Polygraph session page in the web UI.
 
 Once a session activates capture (see "Opt-in and capture boundary" above),
 two preloaded plugin hooks support this:

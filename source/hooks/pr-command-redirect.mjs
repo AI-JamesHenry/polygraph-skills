@@ -15,9 +15,10 @@
 // now goes through the remote `background_pr_create` MCP tool, which the
 // server validates end to end (session ownership, repo access, branch
 // eligibility, always-draft, protection against duplicate PRs on the same
-// branch). Marking a PR ready for review, and editing one, are human actions
-// taken from the Polygraph session page in the web UI, not something an
-// autonomous cloud session does on its own.
+// branch). Marking the session's own draft ready goes through the remote
+// `background_pr_ready` MCP tool, validated the same way server-side (only a
+// PR registered to the session, only draft -> ready). Editing a PR stays a
+// human action taken from the Polygraph session page in the web UI.
 //
 // This hook is routing/UX only: it exists to give the agent a fast, local
 // "wrong tool, here's the right one" signal instead of a slow, confusing
@@ -65,7 +66,7 @@ const CREATE_DENY_REASON =
   'Polygraph cloud sessions create pull requests with the background_pr_create MCP tool, which opens a draft on a branch this session pushed. Call background_pr_create instead of gh.';
 
 const READY_DENY_REASON =
-  'Marking a Polygraph cloud-session PR ready for review is a human action. Ask the user to mark it ready from the Polygraph session page.';
+  'Polygraph cloud sessions mark their own draft PR ready with the background_pr_ready MCP tool, which only transitions a PR this session created. Call background_pr_ready instead of gh.';
 
 const EDIT_DENY_REASON =
   'Editing a Polygraph cloud-session PR is a human action. Ask the user to update it from the Polygraph session page, or include the change when creating the PR with background_pr_create.';

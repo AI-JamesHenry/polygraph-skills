@@ -19,7 +19,7 @@ const CAPTURE_HOOK_URL =
 const CREATE_DENY_REASON =
   'Polygraph cloud sessions create pull requests with the background_pr_create MCP tool, which opens a draft on a branch this session pushed. Call background_pr_create instead of gh.';
 const READY_DENY_REASON =
-  'Marking a Polygraph cloud-session PR ready for review is a human action. Ask the user to mark it ready from the Polygraph session page.';
+  'Polygraph cloud sessions mark their own draft PR ready with the background_pr_ready MCP tool, which only transitions a PR this session created. Call background_pr_ready instead of gh.';
 const EDIT_DENY_REASON =
   'Editing a Polygraph cloud-session PR is a human action. Ask the user to update it from the Polygraph session page, or include the change when creating the PR with background_pr_create.';
 
