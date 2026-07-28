@@ -157,6 +157,15 @@ There are three cases. Pick exactly one before calling any tool. The case labels
 
 **Hard rule: if a session ID is already in scope (e.g., the startup banner says "You're in Polygraph session …", or the user passed one), that session ID is authoritative for this entire conversation. NEVER call `start_session` — doing so creates a brand-new session and orphans the one the parent harness is pointed at. Reuse the existing session via `show_session` and, if needed, `add_repo`.**
 
+**Cloud-agent sessions never need init machinery.** A session started with
+the `background_session_start` connector tool (session IDs look like
+`background-…`) already exists and is already bound to the current
+repository. Do not launch `polygraph-init-subagent`, do not call
+`start_session`, and do not attach the repository again — the session is
+complete as created. If a later step genuinely needs another repository
+attached, call the connector's `add_repo` directly from this conversation
+with the exact ref.
+
 **Case A — Existing session, already has repos.** Call `show_session` directly with the known session ID. Skip the init subagent entirely, show the session details (format below), and proceed.
 
 **Case B — Existing session, no repos yet (or user wants to add more).** If the user gives exact repo refs by ID, short name, full name, GitHub `owner/repo` slug, or URL-like slug, call `add_repo(sessionId, repoIds: [...])` directly with those refs. Do NOT call `list_repos`, do NOT ask for candidates, and do NOT launch the init subagent just to resolve those refs. If the user wants discovery/filtering instead, launch the `polygraph-init-subagent`, passing both the existing `sessionId` and `userContext`. The subagent will discover candidates, select relevant repositories, and call `add_repo` against the existing session — it will NOT call `start_session`.

@@ -105,6 +105,14 @@ before repository work.
    are distinct from the provider session URL). Only then continue with the
    user's task.
 
+After step 6 the Polygraph session exists and is already bound to this
+repository. Do not run any other session-initialization machinery on top:
+never launch `polygraph-init-subagent`, never call `start_session`, and
+never re-attach this repository with `add_repo` — the session is complete
+as created. The `polygraph` CLI is not installed in cloud workers; if a
+later step needs a Polygraph operation, use the `Polygraph` connector's
+tools directly from this conversation.
+
 Do not call `background_capture_event` yourself during start or afterwards.
 The hosted API records the initial task atomically with session creation.
 After activation, the detached sidecar tails the provider transcript

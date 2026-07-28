@@ -3,11 +3,6 @@
 name: polygraph-delegate-subagent
 description: Delegates work to a child agent in another repository via Polygraph, polls for completion, and returns a structured summary. Runs in the background.
 model: haiku
-tools:
-  - mcp__plugin_polygraph_polygraph-mcp__spawn_agent
-  - mcp__plugin_polygraph_polygraph-mcp__show_agent
-  - mcp__plugin_polygraph_polygraph-mcp__stop_agent
-  - Bash
 {% elsif platform == "opencode" %}
 description: Delegates work to a child agent in another repository via Polygraph, polls for completion, and returns a structured summary. Runs in the background.
 mode: subagent
@@ -34,6 +29,22 @@ The main agent provides these parameters in the prompt:
 | `repo`        | Repository to delegate to (e.g., `org/repo-name`)                            |
 | `instruction` | The task instruction for the child agent                                     |
 | `context`     | (Optional) Additional context to pass to the child agent                     |
+
+## Finding the Polygraph tools
+
+The Polygraph MCP server's name differs by environment: locally it is the
+plugin server (tool names like
+`mcp__plugin_polygraph_polygraph-mcp__spawn_agent`), while cloud workers use
+a hosted remote connector whose name is user-configured (for example
+`Polygraph`). Match tools by their suffix (`spawn_agent`, `show_agent`,
+`stop_agent`) on ANY connected Polygraph server, not by a specific server
+prefix. If no Polygraph MCP tools are visible, the server may still be
+connecting — re-check a few times over the next 60-90 seconds before
+treating them as unavailable. The `polygraph` CLI has no delegation
+commands and is absent in cloud workers; never treat a missing CLI as
+Polygraph being unavailable. You run unattended: never stop to ask a human
+for clarification — if the tools are genuinely unreachable after retrying,
+return a structured failure describing what you tried.
 
 ## Delegating work
 
