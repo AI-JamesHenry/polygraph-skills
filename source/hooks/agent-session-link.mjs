@@ -5,12 +5,34 @@ import { spawnSync } from 'node:child_process';
 
 const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
-const AGENT_TYPES = new Set(['claude', 'codex', 'opencode']);
+const AGENT_TYPES = new Set(['claude', 'codex', 'opencode', 'grok']);
 const COMMAND_HOOK_TOOL = /^mcp__(?:plugin_polygraph_)?polygraph[-_]mcp__/;
-const OPENCODE_TOOL = /^polygraph(?:(?:-|_)mcp)?_/;
+// OpenCode and Grok both name MCP tools without Claude's `mcp__` prefix:
+// OpenCode as `polygraph_<tool>`, Grok as `<server>__<tool>` (so
+// `polygraph-mcp__spawn_agent`). One pattern covers both.
+const BARE_PREFIX_TOOL = /^polygraph(?:(?:-|_)mcp)?_/;
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+/**
+ * Grok's hook stdin envelope is camelCase throughout where Claude and Codex
+ * use snake_case (`sessionId` vs `session_id`, `hookEventName` vs
+ * `hook_event_name`, `toolName` vs `tool_name`). Normalizing once at the
+ * boundary keeps every downstream reader on the snake_case names instead of
+ * spreading `a ?? b` pairs through the hook logic. Snake_case wins when both
+ * are present, so a harness that already speaks it is untouched.
+ */
+export function normalizeHookPayload(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  return {
+    ...payload,
+    session_id: payload.session_id ?? payload.sessionId,
+    hook_event_name: payload.hook_event_name ?? payload.hookEventName,
+    tool_name: payload.tool_name ?? payload.toolName,
+    transcript_path: payload.transcript_path ?? payload.transcriptPath,
+  };
 }
 
 function isManagedChildEnvironment(env) {
@@ -19,7 +41,7 @@ function isManagedChildEnvironment(env) {
 
 export function isPolygraphMcpToolName(toolName) {
   const name = nonEmptyString(toolName);
-  return Boolean(name && (COMMAND_HOOK_TOOL.test(name) || OPENCODE_TOOL.test(name)));
+  return Boolean(name && (COMMAND_HOOK_TOOL.test(name) || BARE_PREFIX_TOOL.test(name)));
 }
 
 export function buildLinkAgentSessionArgs({
@@ -85,10 +107,11 @@ export function linkAgentSession(claim, spawn = spawnSync, env = process.env) {
   return true;
 }
 
-export function buildCommandHookLink(payload, agentType, env = process.env) {
-  if (!payload || typeof payload !== 'object') return undefined;
+export function buildCommandHookLink(rawPayload, agentType, env = process.env) {
+  if (!rawPayload || typeof rawPayload !== 'object') return undefined;
   if (isManagedChildEnvironment(env)) return undefined;
 
+  const payload = normalizeHookPayload(rawPayload);
   const agentSessionId = nonEmptyString(payload.session_id);
   if (!agentSessionId) return undefined;
 

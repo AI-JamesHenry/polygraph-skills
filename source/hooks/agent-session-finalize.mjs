@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
 
+import { normalizeHookPayload } from './agent-session-link.mjs';
+
+// Harnesses that fire a session-teardown event carrying their own session id.
+// Codex and OpenCode ship no SessionEnd hook, so they never finalize here.
+const FINALIZE_AGENT_TYPES = new Set(['claude', 'grok']);
+
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
@@ -17,7 +23,9 @@ export function buildFinalizeAgentSessionArgs({
 }) {
   const harnessSession = nonEmptyString(agentSessionId);
   const hookSource = nonEmptyString(source);
-  if (agentType !== 'claude') throw new Error(`Unsupported agent type: ${agentType}`);
+  if (!FINALIZE_AGENT_TYPES.has(agentType)) {
+    throw new Error(`Unsupported agent type: ${agentType}`);
+  }
   if (!harnessSession) throw new Error('agentSessionId is required');
   if (!hookSource) throw new Error('source is required');
 
@@ -65,10 +73,15 @@ export function finalizeAgentSession(claim, spawn = spawnSync, env = process.env
   return true;
 }
 
-export function buildCommandHookFinalize(payload, agentType, env = process.env) {
-  if (!payload || typeof payload !== 'object') return undefined;
+export function buildCommandHookFinalize(rawPayload, agentType, env = process.env) {
+  if (!rawPayload || typeof rawPayload !== 'object') return undefined;
   if (isManagedChildEnvironment(env)) return undefined;
-  if (agentType !== 'claude' || payload.hook_event_name !== 'SessionEnd') {
+
+  const payload = normalizeHookPayload(rawPayload);
+  if (
+    !FINALIZE_AGENT_TYPES.has(agentType) ||
+    payload.hook_event_name !== 'SessionEnd'
+  ) {
     return undefined;
   }
 

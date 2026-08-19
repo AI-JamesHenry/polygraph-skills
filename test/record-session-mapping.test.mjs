@@ -90,6 +90,10 @@ test('the hook helper exposes no operation-specific parsing API', () => {
     'isPolygraphMcpToolName',
     'linkAgentSession',
     'logHookFailure',
+    // Envelope shape only, shared with agent-session-finalize.mjs. It maps
+    // Grok's camelCase keys onto the snake_case names the hooks already read,
+    // and carries no per-operation knowledge.
+    'normalizeHookPayload',
   ]);
 
   const source = readFileSync(
@@ -626,4 +630,103 @@ test('read and failed PostToolUse activity forwards identity without session sem
     );
     assert.equal(invocation.options.env.REQUIRED_HARNESS_ENV, 'preserved');
   }
+});
+
+test('Grok registers a PostToolUse hook for its own unprefixed tool names', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('../source/grok/hooks/hooks.json', import.meta.url), 'utf8')
+  );
+  const hooks = manifest.hooks.PostToolUse;
+  assert.equal(hooks.length, 1);
+
+  // Grok qualifies MCP tools as `<server>__<tool>` with no `mcp__` prefix, so
+  // the Claude matcher would never fire here.
+  const matcher = new RegExp(hooks[0].matcher);
+  assert.equal(matcher.test('polygraph-mcp__show_session'), true);
+  assert.equal(matcher.test('polygraph_mcp__unknown_future_tool'), true);
+  assert.equal(matcher.test('some-other-server__start_session'), false);
+  assert.doesNotMatch(hooks[0].matcher, /start_session|update_session|show_session/);
+  assert.match(hooks[0].hooks[0].command, /record-session-mapping\.mjs grok/);
+  assert.match(hooks[0].hooks[0].command, /\$\{GROK_PLUGIN_ROOT\}/);
+});
+
+test('Grok hooks override the 5s default timeout', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('../source/grok/hooks/hooks.json', import.meta.url), 'utf8')
+  );
+  for (const group of Object.values(manifest.hooks).flat()) {
+    for (const handler of group.hooks) {
+      assert.ok(
+        handler.timeout > 5,
+        `${handler.command} must raise Grok's 5s observe-hook default`
+      );
+    }
+  }
+});
+
+test('buildCommandHookLink reads Grok camelCase envelopes', () => {
+  const link = buildCommandHookLink(
+    {
+      hookEventName: 'PostToolUse',
+      sessionId: 'grok-session-1',
+      toolName: 'polygraph-mcp__start_session',
+      cwd: '/repo',
+      transcriptPath: '/transcripts/updates.jsonl',
+    },
+    'grok',
+    {}
+  );
+
+  assert.deepEqual(link, {
+    agentType: 'grok',
+    agentSessionId: 'grok-session-1',
+    cwd: '/repo',
+    transcriptPath: '/transcripts/updates.jsonl',
+    source: 'hook',
+  });
+});
+
+test('Grok SessionStart is eligible for speculative capture', () => {
+  const link = buildCommandHookLink(
+    { hookEventName: 'SessionStart', sessionId: 'grok-session-2', cwd: '/repo' },
+    'grok',
+    {}
+  );
+  assert.equal(link?.agentSessionId, 'grok-session-2');
+  assert.equal(link?.agentType, 'grok');
+});
+
+test('buildCommandHookFinalize accepts a Grok SessionEnd envelope', () => {
+  const finalize = buildCommandHookFinalize(
+    { hookEventName: 'SessionEnd', sessionId: 'grok-session-3', cwd: '/repo' },
+    'grok',
+    {}
+  );
+  assert.equal(finalize?.agentType, 'grok');
+  assert.equal(finalize?.agentSessionId, 'grok-session-3');
+
+  // Codex and OpenCode ship no SessionEnd hook and must stay unsupported.
+  assert.equal(
+    buildCommandHookFinalize(
+      { hook_event_name: 'SessionEnd', session_id: 'x' },
+      'codex',
+      {}
+    ),
+    undefined
+  );
+});
+
+test('snake_case wins when a harness sends both envelope spellings', () => {
+  const link = buildCommandHookLink(
+    {
+      hook_event_name: 'PostToolUse',
+      hookEventName: 'SessionStart',
+      session_id: 'canonical',
+      sessionId: 'camel',
+      tool_name: 'mcp__polygraph-mcp__start_session',
+    },
+    'claude',
+    {}
+  );
+  assert.equal(link?.agentSessionId, 'canonical');
 });

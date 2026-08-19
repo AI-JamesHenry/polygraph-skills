@@ -61,6 +61,14 @@ export function createPlatformConfigs() {
       skillsDir: 'skills',
       skillsFile: 'SKILL.md',
     },
+    grok: {
+      outputDir: join(distDir, 'grok'),
+      supportsAgents: true,
+      agentsDir: 'agents',
+      agentsExt: '.md',
+      skillsDir: 'skills',
+      skillsFile: 'SKILL.md',
+    },
     codex: {
       outputDir: join(distDir, 'codex'),
       supportsAgents: true,

@@ -33,6 +33,19 @@ function buildClaudePluginManifest(pkgJson) {
   };
 }
 
+export function buildGrokPluginManifest(pkgJson) {
+  return {
+    name: 'polygraph',
+    version: pkgJson.version,
+    description: pkgJson.description,
+    author: pkgJson.author,
+    homepage: 'https://docs.trypolygraph.com/',
+    license: pkgJson.license,
+    repository: pkgJson.repository,
+    keywords: pkgJson.keywords,
+  };
+}
+
 export function buildCodexPluginManifest(pkgJson) {
   return {
     name: 'polygraph',
@@ -139,6 +152,52 @@ export function finalizeClaudeDist(pkgJson) {
   }
 
   copySharedDocs(claudeDir);
+}
+
+/**
+ * Grok reads the Claude plugin layout, but three things differ enough that it
+ * needs its own dist rather than a rebadged Claude one: its plugin manifest
+ * lives in `.grok-plugin/`, its MCP tools are named `<server>__<tool>` with no
+ * `mcp__` prefix (so the hook matchers differ), and its hook stdin envelope is
+ * camelCase. The hook scripts themselves are shared and normalize the payload.
+ */
+export function finalizeGrokDist(pkgJson) {
+  const grokDir = join(distDir, 'grok');
+  const pluginDir = join(grokDir, '.grok-plugin');
+  mkdirSync(pluginDir, { recursive: true });
+
+  writeJson(
+    join(grokDir, 'package.json'),
+    buildPublishPackageJson(pkgJson, '@polygraph/grok-plugin', [
+      'skills/',
+      'agents/',
+      'hooks/',
+      '.mcp.json',
+      '.grok-plugin/',
+      'README.md',
+    ])
+  );
+  writeJson(join(grokDir, '.mcp.json'), buildMcpConfig('grok'));
+  writeJson(join(pluginDir, 'plugin.json'), buildGrokPluginManifest(pkgJson));
+
+  const grokHooksDir = join(grokDir, 'hooks');
+  mkdirSync(grokHooksDir, { recursive: true });
+  cpSync(
+    join(sourceDir, 'grok', 'hooks', 'hooks.json'),
+    join(grokHooksDir, 'hooks.json')
+  );
+  for (const script of [
+    'agent-session-link.mjs',
+    'agent-session-finalize.mjs',
+    'finalize-agent-session.mjs',
+    'record-session-mapping.mjs',
+    'reinject-polygraph-context.mjs',
+    'remind-subagents.mjs',
+  ]) {
+    cpSync(join(sourceDir, 'hooks', script), join(grokHooksDir, script));
+  }
+
+  copySharedDocs(grokDir);
 }
 
 export function finalizeCodexDist(pkgJson) {
