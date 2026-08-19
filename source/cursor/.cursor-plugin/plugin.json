@@ -1,0 +1,12 @@
+{
+  "name": "polygraph",
+  "displayName": "Polygraph",
+  "description": "Polygraph session capture and coordination for Cursor agents.",
+  "version": "0.0.1",
+  "author": "Narwhal Technologies Inc",
+  "homepage": "https://github.com/nrwl/polygraph-skills",
+  "repository": "https://github.com/nrwl/polygraph-skills",
+  "license": "UNLICENSED",
+  "keywords": ["polygraph", "nx"],
+  "hooks": "hooks/hooks.json"
+}
