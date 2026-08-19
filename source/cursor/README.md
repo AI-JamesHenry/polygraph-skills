@@ -1,6 +1,31 @@
 # Cursor Cloud Agents support (spike)
 
-Status: diagnostics phase. Nothing in this directory ships to users yet.
+Status: capture hook implemented (`hooks/polygraph-capture.mjs`, tests in
+`test/cursor-capture.test.mjs`); not yet exercised against a live cloud agent
+or a real capture endpoint. Nothing in this directory ships to users yet.
+
+## Capture flow
+
+1. Hook invocations always dead-drop the current `conversation_id` (the
+   `bc-<uuid>` cloud agent id) to `~/.polygraph/background-capture/`
+   before doing anything else; nothing is transmitted without a marker.
+2. The agent (instructed by the future cursor skill/rules) calls the
+   Polygraph MCP `background_session_start` tool, then runs
+   `node .cursor/hooks/polygraph-capture.mjs activate <captureHookUrl>`.
+   Activation binds the capability URL to the dead-dropped conversation id
+   in a mode-0600 marker. `meta <leaf>` reads the in-VM metadata socket
+   (`agent/id`, `owner/user-email`, `workspace/repo-url`, ...) for the MCP
+   call's arguments.
+3. Each subsequent hook event is mapped to `AgentLogLine` records
+   (+`eventId`/`timestamp`), appended to a per-session outbox, and flushed
+   to `<captureHookUrl>/transcript` from a persisted offset. Parallel hook
+   processes coordinate via a best-effort lock; failures retry on the next
+   invocation; the server's `(sessionId, eventId)` claims dedupe; a 401
+   deactivates capture.
+
+Open items: `afterAgentThought` / subagent payload shapes are unsampled
+(mapped defensively); PR branch events (`/pr` route) are not yet emitted;
+the server does not yet accept a Cursor provider (ocean-side work).
 
 ## Layout: a real Cursor plugin, shim-delivered to cloud agents
 

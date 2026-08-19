@@ -2,17 +2,14 @@
   "version": 1,
   "hooks": {
     "beforeSubmitPrompt": [
-      { "command": "node ./hooks/polygraph-diagnostic.mjs" }
+      { "command": "node ./hooks/polygraph-capture.mjs" }
     ],
-    "postToolUse": [{ "command": "node ./hooks/polygraph-diagnostic.mjs" }],
-    "afterAgentResponse": [
-      { "command": "node ./hooks/polygraph-diagnostic.mjs" }
-    ],
-    "afterAgentThought": [
-      { "command": "node ./hooks/polygraph-diagnostic.mjs" }
-    ],
-    "afterFileEdit": [{ "command": "node ./hooks/polygraph-diagnostic.mjs" }],
-    "subagentStop": [{ "command": "node ./hooks/polygraph-diagnostic.mjs" }],
-    "stop": [{ "command": "node ./hooks/polygraph-diagnostic.mjs" }]
+    "postToolUse": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "postToolUseFailure": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "afterAgentThought": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "afterAgentResponse": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "subagentStart": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "subagentStop": [{ "command": "node ./hooks/polygraph-capture.mjs" }],
+    "stop": [{ "command": "node ./hooks/polygraph-capture.mjs" }]
   }
 }
