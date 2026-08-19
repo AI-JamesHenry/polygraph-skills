@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import {
   createPlatformConfigs,
   distDir,
+  grokPluginDir,
   legacyGeneratedDir,
   recreateDir,
   rootDir,
@@ -23,6 +24,7 @@ function runSync() {
   }
 
   recreateDir(distDir);
+  recreateDir(grokPluginDir);
   const configs = createPlatformConfigs();
 
   for (const [platformKey, config] of Object.entries(configs)) {

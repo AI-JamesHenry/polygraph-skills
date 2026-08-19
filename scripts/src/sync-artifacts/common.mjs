@@ -5,6 +5,11 @@ import { Liquid } from 'liquidjs';
 export const rootDir = join(import.meta.dirname, '..', '..', '..');
 export const sourceDir = join(rootDir, 'source');
 export const distDir = join(rootDir, 'dist');
+// Grok's marketplace resolves a plugin from a path inside the cloned
+// repository; it has no npm source type. So the Grok plugin is built into a
+// committed directory rather than the gitignored dist/, or `grok plugin
+// install` finds nothing in a fresh clone.
+export const grokPluginDir = join(rootDir, 'plugins', 'grok');
 export const legacyGeneratedDir = join(rootDir, 'generated');
 
 const liquid = new Liquid();
@@ -62,7 +67,7 @@ export function createPlatformConfigs() {
       skillsFile: 'SKILL.md',
     },
     grok: {
-      outputDir: join(distDir, 'grok'),
+      outputDir: grokPluginDir,
       supportsAgents: true,
       agentsDir: 'agents',
       agentsExt: '.md',

@@ -1,0 +1,62 @@
+import { readFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+import {
+  buildCommandHookLink,
+  linkAgentSession,
+  logHookFailure,
+} from './agent-session-link.mjs';
+
+function readPayload() {
+  try {
+    const raw = readFileSync(0, 'utf8');
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function main({
+  payload = readPayload(),
+  agentType = process.argv[2],
+  env = process.env,
+  pid = process.ppid,
+  spawn,
+} = {}) {
+  try {
+    const link = buildCommandHookLink(payload, agentType, env);
+    if (!link) return false;
+
+    const claim = {
+      ...link,
+      cwd: link.cwd ?? process.cwd(),
+    };
+    // Claude lifecycle hooks deliberately forward only the exact harness
+    // identity, transcript, cwd, and hook source. PID is not identity and can
+    // be stale by the time an asynchronous SessionStart hook runs.
+    if (!(agentType === 'claude' && payload?.hook_event_name === 'SessionStart')) {
+      claim.pid = pid;
+    }
+
+    return linkAgentSession(claim, spawn, env);
+  } catch (error) {
+    logHookFailure(`${agentType || 'unknown'}:link-agent-session`, error, {
+      hookEventName: payload?.hook_event_name,
+      agentSessionId: payload?.session_id,
+    });
+    return false;
+  }
+}
+
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main();
+}

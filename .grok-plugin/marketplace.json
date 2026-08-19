@@ -10,7 +10,10 @@
       "name": "polygraph",
       "description": "Share and resume agent work with Polygraph sessions, link repos and PRs, monitor CI, and coordinate across repository boundaries when needed.",
       "homepage": "https://docs.trypolygraph.com/",
-      "source": { "type": "local", "path": "./dist/grok" }
+      "source": {
+        "type": "local",
+        "path": "./plugins/grok"
+      }
     }
   ]
 }

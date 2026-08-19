@@ -1,0 +1,244 @@
+// SessionStart hook: when the calling agent (Claude Code or Codex) is running
+// inside a Polygraph session, re-inject the Polygraph session id and basic
+// session info as context. This restores facts that context compaction may
+// have dropped, and re-establishes them on resume.
+//
+// Shared by the Claude and Codex plugins — both fire a SessionStart hook whose
+// stdin carries `session_id` and whose stdout `additionalContext` is injected
+// into the model.
+//
+// Everything is read from local Polygraph state — no network calls:
+//   <sessionsRoot>/<polygraphSessionId>/sidecars/parent-<agentSessionId>.json
+//       (sessionsRoot = $POLYGRAPH_ROOT or ~/.polygraph/sessions) maps this
+//       agent session id -> Polygraph session id (the "parent log sidecar"
+//       the CLI uses to stream parent-agent activity to the UI). Falls back
+//       to the legacy location for sessions created by older CLIs:
+//   ~/.polygraph/sidecars/<polygraphSessionId>/parent-<agentSessionId>.json
+//   ~/.polygraph/sessions/<polygraphSessionId>/session/session.json
+//       holds the session's repos, agentType, and orgId.
+//   ~/.polygraph/config.json
+//       holds selectedUrl, used to build the session URL.
+//
+// Outside a Polygraph session (no matching sidecar) the hook is a silent no-op.
+
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  statSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export function polygraphRoot(home = homedir()) {
+  return path.join(home, '.polygraph');
+}
+
+const HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+// Append a one-line JSON record of a hook failure to ~/.polygraph/logs/hooks.log.
+// This hook must never write to stdout except its hookSpecificOutput payload
+// (Claude Code injects hook stdout into the model context), so this on-disk log
+// is the only record that something went wrong. The logger is failure-proof.
+function logHookFailure(
+  hook,
+  error,
+  meta = {},
+  home = process.env.HOME?.trim() || homedir()
+) {
+  try {
+    const logsDir = path.join(home, '.polygraph', 'logs');
+    mkdirSync(logsDir, { recursive: true });
+    const logFile = path.join(logsDir, 'hooks.log');
+
+    try {
+      if (statSync(logFile).size > HOOK_LOG_MAX_BYTES) {
+        renameSync(logFile, `${logFile}.1`);
+      }
+    } catch {
+      // no prior log, or rotation failed — ignore
+    }
+
+    const entry = {
+      time: new Date().toISOString(),
+      hook,
+      pid: process.pid,
+      ...meta,
+      error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+    };
+    appendFileSync(logFile, JSON.stringify(entry) + '\n');
+  } catch {
+    // Logging must never throw — a failing logger must not break the hook.
+  }
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// Resolve the root directory that holds per-session folders. Overridable via
+// POLYGRAPH_ROOT (must match the Polygraph CLI's own resolution).
+function sessionsRoot(root) {
+  return process.env.POLYGRAPH_ROOT?.trim() || path.join(root, 'sessions');
+}
+
+// Scan the immediate subdirectories of `baseDir`; for each, `candidatePath`
+// maps the subdirectory name to a candidate sidecar file. Returns the first
+// parsed match, or null.
+function scanForSidecar(baseDir, candidatePath) {
+  if (!existsSync(baseDir)) return null;
+
+  let entries;
+  try {
+    entries = readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = candidatePath(entry.name);
+    if (existsSync(candidate)) {
+      return readJson(candidate);
+    }
+  }
+  return null;
+}
+
+// Find the sidecar that maps an agent session id to a Polygraph session.
+// Checks the new per-session layout first, then falls back to the legacy
+// shared sidecars directory. Returns the parsed sidecar object, or null when
+// none matches.
+export function findSidecar(agentSessionId, root = polygraphRoot()) {
+  if (!agentSessionId) return null;
+
+  const fileName = `parent-${agentSessionId}.json`;
+
+  // New layout: <sessionsRoot>/<sessionId>/sidecars/parent-<agentSessionId>.json
+  const sessionsDir = sessionsRoot(root);
+  const fromSessions = scanForSidecar(sessionsDir, (sessionId) =>
+    path.join(sessionsDir, sessionId, 'sidecars', fileName)
+  );
+  if (fromSessions) return fromSessions;
+
+  // Legacy layout: <root>/sidecars/<sessionId>/parent-<agentSessionId>.json
+  const legacyDir = path.join(root, 'sidecars');
+  return scanForSidecar(legacyDir, (sessionId) =>
+    path.join(legacyDir, sessionId, fileName)
+  );
+}
+
+// Build the context block for a Polygraph session, or null when the agent is
+// not running inside a Polygraph session.
+export function buildPolygraphContext(agentSessionId, root = polygraphRoot()) {
+  const sidecar = findSidecar(agentSessionId, root);
+  if (!sidecar || !sidecar.sessionId) return null;
+
+  const polygraphSessionId = sidecar.sessionId;
+  const agentType = sidecar.parentAgentType || 'agent';
+  const session =
+    readJson(
+      path.join(root, 'sessions', polygraphSessionId, 'session', 'session.json')
+    ) ?? {};
+  const config = readJson(path.join(root, 'config.json')) ?? {};
+
+  const baseUrl = config.selectedUrl;
+  const orgId = session.orgId;
+  const sessionUrl =
+    baseUrl && orgId
+      ? `${baseUrl}/orgs/${orgId}/sessions/${polygraphSessionId}`
+      : null;
+
+  const repos = Array.isArray(session.repos) ? session.repos : [];
+  const repoLines = repos.map((repo) => {
+    const role = repo.isInitiator ? ' (initiator)' : '';
+    const strategy = repo.materialization?.strategy
+      ? ` [${repo.materialization.strategy}]`
+      : '';
+    return `  - ${repo.repoFullName}${role}${strategy}`;
+  });
+
+  const lines = [
+    'You are running inside a Polygraph session. Keep this in mind across compaction:',
+    `- Polygraph session id: ${polygraphSessionId}`,
+    sessionUrl ? `- Session URL: ${sessionUrl}` : null,
+    `- Parent agent (${agentType}) session id: ${agentSessionId}`,
+    repoLines.length
+      ? ['- Repositories in this session:', ...repoLines].join('\n')
+      : '- Repositories in this session: (none recorded)',
+    '- To act in this session (delegating work, monitoring CI, opening PRs, etc.), load the polygraph skill for guidance.',
+  ].filter((line) => line != null);
+
+  return lines.join('\n');
+}
+
+function readStdin() {
+  try {
+    // fd 0 — Claude Code / Codex pipe the hook payload as JSON on stdin.
+    return readFileSync(0, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+export function main() {
+  let agentSessionId = '';
+  try {
+    let payload = {};
+    const raw = readStdin();
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = {};
+      }
+    }
+
+    agentSessionId =
+      payload.session_id || process.env.CLAUDE_CODE_SESSION_ID || '';
+
+    const context = buildPolygraphContext(agentSessionId);
+    if (!context) return; // not a Polygraph session — stay silent
+
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: context,
+        },
+      })
+    );
+  } catch (error) {
+    // Never let a hook failure surface to the agent; just record it.
+    logHookFailure('reinject-polygraph-context', error, { agentSessionId });
+  }
+}
+
+// Run only when executed directly as a hook, not when imported (e.g. by tests).
+// realpath both sides so the check holds when the plugin lives under a symlinked
+// path (e.g. macOS /tmp -> /private/tmp, or a symlinked plugin install dir),
+// where import.meta.url is realpath'd by Node but process.argv[1] is not.
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main();
+}

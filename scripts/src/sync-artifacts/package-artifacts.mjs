@@ -1,7 +1,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSync } from 'esbuild';
-import { distDir, rootDir, sourceDir, writeJson } from './common.mjs';
+import { distDir, grokPluginDir, rootDir, sourceDir, writeJson } from './common.mjs';
 
 export function readRootPackageJson() {
   return JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
@@ -162,7 +162,7 @@ export function finalizeClaudeDist(pkgJson) {
  * camelCase. The hook scripts themselves are shared and normalize the payload.
  */
 export function finalizeGrokDist(pkgJson) {
-  const grokDir = join(distDir, 'grok');
+  const grokDir = grokPluginDir;
   const pluginDir = join(grokDir, '.grok-plugin');
   mkdirSync(pluginDir, { recursive: true });
 
