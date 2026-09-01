@@ -245,7 +245,9 @@ const DEFAULT_CURSOR_AGENT_SOCKET = '/run/cursor/api.sock';
 
 export function readCaptureOrigin({
   environment = process.env,
-  workspaceDir = process.cwd(),
+  // Hooks do not run with the workspace as cwd (observed live 2026-09-01), so
+  // the repo-committed launcher passes its own workspace root down explicitly.
+  workspaceDir = process.env.POLYGRAPH_WORKSPACE_DIR || process.cwd(),
 } = {}) {
   const candidate =
     environment.POLYGRAPH_IMPLICIT_CAPTURE_ORIGIN ||
