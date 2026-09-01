@@ -94,6 +94,20 @@ function captureDir(root) {
   return join(root, 'background-capture');
 }
 
+function declinedPath(conversationId, root) {
+  return join(
+    captureDir(root),
+    `cursor-${safeConversationId(conversationId)}.declined.json`
+  );
+}
+
+function bootstrapAttemptPath(conversationId, root) {
+  return join(
+    captureDir(root),
+    `cursor-${safeConversationId(conversationId)}.bootstrap-attempt.json`
+  );
+}
+
 function currentSessionPath(root) {
   return join(captureDir(root), 'cursor-current.json');
 }
@@ -206,6 +220,168 @@ export function readMetaData(leaf, { environment = process.env } = {}) {
     });
     request.end();
   });
+}
+
+// ---------------------------------------------------------------------------
+// Implicit-session bootstrap (opt-in per repository + per Polygraph account).
+//
+// When a conversation has no activation marker, and the repository carries a
+// committed `.cursor/polygraph-capture.json` naming a Polygraph origin, the
+// hook authenticates itself: it mints a short-lived Cursor OIDC identity token
+// from the agent socket (POST /v1/tokens/oidc, 5-minute RS256 JWT signed by
+// Cursor) and exchanges it at the origin's implicit-session endpoint. The
+// server verifies the signature against Cursor's JWKS and enforces the
+// org-level `captureImplicitCloudAgentSessions` opt-in plus owner and
+// repository mapping; on success it returns a capture capability URL and the
+// hook self-activates. No agent involvement, no secrets in the repo.
+//
+// Refusals are respected: any 4xx other than 401/429 writes a declined marker
+// and the conversation never asks again. Transient failures retry, throttled.
+
+const IMPLICIT_EXCHANGE_TIMEOUT_MS = 8_000;
+const MINT_TIMEOUT_MS = 5_000;
+const BOOTSTRAP_RETRY_MS = 15_000;
+const DEFAULT_CURSOR_AGENT_SOCKET = '/run/cursor/api.sock';
+
+export function readCaptureOrigin({
+  environment = process.env,
+  workspaceDir = process.cwd(),
+} = {}) {
+  const candidate =
+    environment.POLYGRAPH_IMPLICIT_CAPTURE_ORIGIN ||
+    readJson(join(workspaceDir, '.cursor', 'polygraph-capture.json'))?.origin;
+  if (typeof candidate !== 'string') return null;
+  try {
+    const parsed = new URL(candidate);
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      (parsed.pathname !== '/' && parsed.pathname !== '')
+    ) {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+// Same request shape the OIDC probe live-verified on 2026-09-01: body {aud},
+// response {token}.
+function mintIdentityToken(audience, { environment = process.env } = {}) {
+  const socketPath =
+    environment.CURSOR_AGENT_SOCKET || DEFAULT_CURSOR_AGENT_SOCKET;
+  if (!existsSync(socketPath)) return Promise.resolve(null);
+  return new Promise((resolvePromise) => {
+    const body = JSON.stringify({ aud: audience });
+    const request = httpRequest(
+      {
+        socketPath,
+        path: '/v1/tokens/oidc',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+        timeout: MINT_TIMEOUT_MS,
+      },
+      (response) => {
+        let raw = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          if (raw.length < 65_536) raw += chunk;
+        });
+        response.on('end', () => {
+          if (response.statusCode !== 200) return resolvePromise(null);
+          try {
+            const parsed = JSON.parse(raw);
+            resolvePromise(typeof parsed.token === 'string' ? parsed.token : null);
+          } catch {
+            resolvePromise(null);
+          }
+        });
+      }
+    );
+    request.on('error', () => resolvePromise(null));
+    request.on('timeout', () => {
+      request.destroy();
+      resolvePromise(null);
+    });
+    request.end(body);
+  });
+}
+
+async function bootstrapImplicitCapture(
+  input,
+  conversationId,
+  { root, fetchImpl, now, environment = process.env }
+) {
+  if (readJson(declinedPath(conversationId, root))) return null;
+  const origin = readCaptureOrigin({ environment });
+  if (!origin) return null;
+
+  // Throttle: hooks are parallel short-lived processes; without this, one
+  // unreachable server means a mint per hook event.
+  const lastAttempt = readJson(bootstrapAttemptPath(conversationId, root));
+  if (
+    Number.isFinite(lastAttempt?.at) &&
+    now() - lastAttempt.at < BOOTSTRAP_RETRY_MS
+  ) {
+    return null;
+  }
+  writeJsonAtomically(bootstrapAttemptPath(conversationId, root), { at: now() });
+
+  const token = await mintIdentityToken(origin, { environment });
+  if (!token) return null;
+
+  const task =
+    input?.hook_event_name === 'beforeSubmitPrompt' &&
+    typeof input.prompt === 'string' &&
+    input.prompt.trim()
+      ? truncate(input.prompt)
+      : undefined;
+
+  let response;
+  try {
+    response = await fetchImpl(
+      `${origin}/nx-cloud/polygraph/hooks/implicit-session`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token, ...(task ? { task } : {}) }),
+        signal: AbortSignal.timeout(IMPLICIT_EXCHANGE_TIMEOUT_MS),
+      }
+    );
+  } catch {
+    return null;
+  }
+  if (response.status >= 400 && response.status !== 401 && response.status !== 429) {
+    // Understood and refused (toggle off, unknown owner, unmatched repo):
+    // stop asking for this conversation.
+    writeJsonAtomically(declinedPath(conversationId, root), {
+      status: response.status,
+      at: now(),
+    });
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    return null;
+  }
+  if (typeof result?.captureHookUrl !== 'string') return null;
+  try {
+    await activateCapture(result.captureHookUrl, { root, conversationId, now });
+  } catch {
+    return null;
+  }
+  return readMarker(conversationId, root);
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +668,9 @@ export function deactivateCapture(conversationId, { root = defaultRoot() } = {})
   rmSync(offsetPath(conversationId, root), { force: true });
   rmSync(outboxPath(conversationId, root), { force: true });
   rmSync(markerPath(conversationId, root), { force: true });
+  rmSync(bootstrapAttemptPath(conversationId, root), { force: true });
+  // The declined marker survives on purpose: deactivation does not reopen a
+  // refused conversation. Delete the file by hand to retry a refusal.
 }
 
 export async function handleHookInvocation(
@@ -511,8 +690,15 @@ export async function handleHookInvocation(
     updatedAt: now(),
   });
 
-  const marker = readMarker(conversationId, root);
-  if (!marker) return { status: 'inactive' };
+  let marker = readMarker(conversationId, root);
+  if (!marker) {
+    marker = await bootstrapImplicitCapture(input, conversationId, {
+      root,
+      fetchImpl,
+      now,
+    });
+    if (!marker) return { status: 'inactive' };
+  }
 
   appendOutboxLines(conversationId, mapHookEventToLines(input, { now }), root);
   return flushOutbox(conversationId, marker, { root, fetchImpl, now });
